@@ -168,7 +168,7 @@ export async function getLicenseStatus(): Promise<LicenseInfo> {
     return invoke('get_license_status');
   }
   if (!webLicenseKey) throw new Error('No license activated');
-  const resp = await apiGet<{ valid: boolean; license: { plan: string; email: string; expires_at: string; is_active: boolean; machines: { machine_id: string; activated_at: string | null }[]; allowed_plugins: string[] } }>('/auth/status', {
+  const resp = await apiGet<{ valid: boolean; license: { plan: string; email: string; expires_at: string; is_active: boolean; machines: { machine_id: string; activated_at: string | null }[]; max_machines?: number; allowed_plugins: string[] } }>('/auth/status', {
     license_key: webLicenseKey,
     machine_id: webMachineId,
   });
@@ -178,7 +178,7 @@ export async function getLicenseStatus(): Promise<LicenseInfo> {
     is_active: resp.license.is_active,
     expires_at: resp.license.expires_at,
     machines: resp.license.machines.map(m => ({ machine_id: m.machine_id, activated_at: m.activated_at || '' })),
-    max_machines: 3,
+    max_machines: resp.license.max_machines ?? 3,
   };
 }
 
