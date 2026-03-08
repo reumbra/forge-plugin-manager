@@ -15,39 +15,29 @@ interface Props {
   license: LicenseInfo;
 }
 
-// Dependency graph — defines catalog structure
-const CATALOG_SECTIONS = [
-  {
-    id: 'foundations',
+// Category display config — order + labels + descriptions
+const CATEGORY_CONFIG: Record<string, { title: string; description: string; layout: 'cards' | 'grid' }> = {
+  foundations: {
     title: 'Foundations',
     description: 'Core modules required by all plugins',
-    plugins: ['forge-core', 'forge-product'],
+    layout: 'cards',
   },
-  {
-    id: 'devtools',
+  devtools: {
     title: 'Development Tools',
     description: 'QA, tracking, automation, and parallel development',
-    plugins: ['forge-qa', 'forge-tracker', 'forge-autopilot', 'forge-worktree'],
+    layout: 'cards',
   },
-  {
-    id: 'advisors',
+  advisors: {
     title: 'Product Advisors',
     description: 'Strategy and growth modules — powered by forge-product',
-    requires: 'forge-product',
-    plugins: [
-      'forge-discovery',
-      'forge-marketing',
-      'forge-analytics',
-      'forge-onboarding',
-      'forge-copy',
-      'forge-seo',
-      'forge-growth',
-      'forge-ab',
-    ],
+    layout: 'grid',
   },
-] as const;
+};
 
-// Short labels for advisor plugins (drop "forge-" prefix)
+// Display order for known categories
+const CATEGORY_ORDER = ['foundations', 'devtools', 'advisors'];
+
+// Short labels for compact grid layout
 const SHORT_LABELS: Record<string, string> = {
   'forge-discovery': 'Discovery',
   'forge-marketing': 'Marketing',
@@ -58,6 +48,7 @@ const SHORT_LABELS: Record<string, string> = {
   'forge-growth': 'Growth',
   'forge-ab': 'A/B Testing',
   'forge-prompts': 'Prompts',
+  'forge-init': 'Init',
 };
 
 export default function CatalogPage({ license }: Props) {
@@ -68,7 +59,7 @@ export default function CatalogPage({ license }: Props) {
   const [installing, setInstalling] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [target, setTarget] = useState<InstallTarget>('claude-code');
+  const [target, setTarget] = useState<InstallTarget>('claude-cowork');
 
   useEffect(() => {
     loadData();
@@ -86,10 +77,10 @@ export default function CatalogPage({ license }: Props) {
       setInstalled(inst);
       setAppInfo(info);
 
-      // Auto-select available target
+      // Auto-select available target (prefer Cowork)
       if (info) {
-        if (info.targets.claude_code && !info.targets.claude_cowork) setTarget('claude-code');
-        else if (!info.targets.claude_code && info.targets.claude_cowork) setTarget('claude-cowork');
+        if (info.targets.claude_cowork && !info.targets.claude_code) setTarget('claude-cowork');
+        else if (!info.targets.claude_cowork && info.targets.claude_code) setTarget('claude-code');
       }
     } catch (err) {
       setError(String(err));
@@ -107,7 +98,7 @@ export default function CatalogPage({ license }: Props) {
       const inst = await getInstalledPlugins().catch(() => []);
       setInstalled(inst);
 
-      const targetLabel = target === 'claude-code' ? 'Claude Code' : 'Claude Cowork';
+      const targetLabel = target === 'claude-cowork' ? 'Claude Cowork' : 'Claude Code';
       setSuccessMsg(`${pluginName} installed to ${targetLabel}. Restart your session to load it.`);
     } catch (err) {
       setError(String(err));
@@ -116,7 +107,6 @@ export default function CatalogPage({ license }: Props) {
     }
   };
 
-  const getPlugin = (name: string) => plugins.find((p) => p.name === name);
   const isInstalledForTarget = (name: string) => {
     const plugin = installed.find((p) => p.name === name);
     return plugin?.targets?.includes(target) ?? false;
@@ -126,7 +116,46 @@ export default function CatalogPage({ license }: Props) {
   const hasTargets = appInfo && (appInfo.targets.claude_code || appInfo.targets.claude_cowork);
   const hasBothTargets = appInfo?.targets.claude_code && appInfo?.targets.claude_cowork;
 
+  // Group plugins by category dynamically
+  const groupedPlugins = () => {
+    const groups: { key: string; title: string; description: string; layout: 'cards' | 'grid'; plugins: PluginInfo[] }[] = [];
+    const usedCategories = new Set<string>();
+
+    // First: known categories in defined order
+    for (const catKey of CATEGORY_ORDER) {
+      const catPlugins = plugins.filter((p) => p.category === catKey);
+      if (catPlugins.length === 0) continue;
+      const config = CATEGORY_CONFIG[catKey];
+      groups.push({
+        key: catKey,
+        title: config.title,
+        description: config.description,
+        layout: config.layout,
+        plugins: catPlugins,
+      });
+      usedCategories.add(catKey);
+    }
+
+    // Then: unknown categories (new ones from API) + null category → "Other"
+    const otherPlugins = plugins.filter(
+      (p) => !p.category || !usedCategories.has(p.category)
+    );
+    if (otherPlugins.length > 0) {
+      groups.push({
+        key: 'other',
+        title: 'Other',
+        description: 'Additional plugins',
+        layout: 'grid',
+        plugins: otherPlugins,
+      });
+    }
+
+    return groups;
+  };
+
   if (loading) return <LoadingState />;
+
+  const sections = groupedPlugins();
 
   return (
     <div>
@@ -145,32 +174,32 @@ export default function CatalogPage({ license }: Props) {
         </button>
       </div>
 
-      {/* Target selector */}
+      {/* Target selector — Cowork first */}
       {hasTargets && (
         <div className="mb-5 flex items-center gap-3">
           <span className="text-xs text-gray-500">Install to:</span>
           {hasBothTargets ? (
             <div className="flex rounded-lg border border-gray-700 overflow-hidden">
               <button
-                onClick={() => setTarget('claude-code')}
-                className={`px-3 py-1.5 text-xs transition-colors ${
-                  target === 'claude-code' ? 'bg-forge-600/20 text-forge-300' : 'text-gray-400 hover:text-gray-200'
-                }`}
-              >
-                Claude Code
-              </button>
-              <button
                 onClick={() => setTarget('claude-cowork')}
-                className={`px-3 py-1.5 text-xs border-l border-gray-700 transition-colors ${
+                className={`px-3 py-1.5 text-xs transition-colors ${
                   target === 'claude-cowork' ? 'bg-forge-600/20 text-forge-300' : 'text-gray-400 hover:text-gray-200'
                 }`}
               >
                 Claude Cowork
               </button>
+              <button
+                onClick={() => setTarget('claude-code')}
+                className={`px-3 py-1.5 text-xs border-l border-gray-700 transition-colors ${
+                  target === 'claude-code' ? 'bg-forge-600/20 text-forge-300' : 'text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                Claude Code
+              </button>
             </div>
           ) : (
             <span className="text-xs text-gray-300">
-              {appInfo?.targets.claude_code ? 'Claude Code' : 'Claude Cowork'}
+              {appInfo?.targets.claude_cowork ? 'Claude Cowork' : 'Claude Code'}
             </span>
           )}
         </div>
@@ -197,23 +226,18 @@ export default function CatalogPage({ license }: Props) {
         </div>
       )}
 
-      {/* Catalog sections */}
+      {/* Dynamic catalog sections */}
       <div className="space-y-8">
-        {CATALOG_SECTIONS.map((section) => {
-          const sectionPlugins = section.plugins
-            .map((name) => getPlugin(name))
-            .filter((p): p is PluginInfo => p !== undefined);
-
-          if (sectionPlugins.length === 0) return null;
-
-          const requiresMet = !('requires' in section) || isInstalledForTarget(section.requires!);
+        {sections.map((section) => {
+          const requiresProduct = section.key === 'advisors';
+          const requiresMet = !requiresProduct || isInstalledForTarget('forge-product');
 
           return (
-            <div key={section.id}>
+            <div key={section.key}>
               <div className="mb-3">
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-medium text-gray-300">{section.title}</h3>
-                  {'requires' in section && (
+                  {requiresProduct && (
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                       requiresMet
                         ? 'bg-green-500/10 text-green-400'
@@ -226,114 +250,31 @@ export default function CatalogPage({ license }: Props) {
                 <p className="text-xs text-gray-600 mt-0.5">{section.description}</p>
               </div>
 
-              {section.id === 'advisors' ? (
-                // Compact grid for advisors
+              {section.layout === 'grid' ? (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {sectionPlugins.map((plugin) => {
-                    const pluginInstalled = isInstalledForTarget(plugin.name);
-                    const installedVersion = getInstalledVersion(plugin.name);
-                    const hasUpdate = pluginInstalled && installedVersion !== plugin.latest_version;
-
-                    return (
-                      <div
-                        key={plugin.name}
-                        className="bg-gray-900 border border-gray-800 rounded-lg p-3 hover:border-gray-700 transition-colors"
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <h4 className="text-xs font-medium text-white">
-                            {SHORT_LABELS[plugin.name] || plugin.name}
-                          </h4>
-                          <span className="text-[9px] text-gray-600 font-mono">v{plugin.latest_version}</span>
-                        </div>
-                        <p className="text-[10px] text-gray-500 line-clamp-2 mb-2 min-h-[2rem]">
-                          {plugin.description}
-                        </p>
-                        {pluginInstalled && !hasUpdate ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-green-400">
-                            <span className="w-1 h-1 bg-green-400 rounded-full" />
-                            v{installedVersion}
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => handleInstall(plugin.name)}
-                            disabled={installing === plugin.name}
-                            className="px-2.5 py-1 bg-forge-600 hover:bg-forge-700 disabled:bg-gray-800 disabled:text-gray-600 text-white text-[10px] rounded transition-colors"
-                          >
-                            {installing === plugin.name
-                              ? '...'
-                              : hasUpdate
-                                ? `Update`
-                                : 'Install'}
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {section.plugins.map((plugin) => (
+                    <CompactCard
+                      key={plugin.name}
+                      plugin={plugin}
+                      installed={isInstalledForTarget(plugin.name)}
+                      installedVersion={getInstalledVersion(plugin.name)}
+                      installing={installing === plugin.name}
+                      onInstall={() => handleInstall(plugin.name)}
+                    />
+                  ))}
                 </div>
               ) : (
-                // Full cards for foundations and devtools
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {sectionPlugins.map((plugin) => {
-                    const pluginInstalled = isInstalledForTarget(plugin.name);
-                    const installedVersion = getInstalledVersion(plugin.name);
-                    const hasUpdate = pluginInstalled && installedVersion !== plugin.latest_version;
-                    const isCore = plugin.name === 'forge-core';
-
-                    return (
-                      <div
-                        key={plugin.name}
-                        className={`bg-gray-900 border rounded-xl p-5 hover:border-gray-700 transition-colors ${
-                          isCore ? 'border-forge-600/30' : 'border-gray-800'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h4 className="text-sm font-medium text-white">{plugin.name}</h4>
-                              {isCore && (
-                                <span className="text-[9px] px-1.5 py-0.5 bg-forge-600/20 text-forge-300 rounded">
-                                  required
-                                </span>
-                              )}
-                              {plugin.name === 'forge-product' && (
-                                <span className="text-[9px] px-1.5 py-0.5 bg-purple-600/20 text-purple-300 rounded">
-                                  hub
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <span className="text-[10px] text-gray-600 font-mono ml-2">
-                            v{plugin.latest_version}
-                          </span>
-                        </div>
-
-                        <p className="text-xs text-gray-500 mt-2 line-clamp-2">
-                          {plugin.description || 'No description available'}
-                        </p>
-
-                        <div className="mt-4">
-                          {pluginInstalled && !hasUpdate ? (
-                            <span className="inline-flex items-center gap-1.5 text-xs text-green-400">
-                              <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
-                              Installed (v{installedVersion})
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() => handleInstall(plugin.name)}
-                              disabled={installing === plugin.name}
-                              className="px-4 py-1.5 bg-forge-600 hover:bg-forge-700 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs rounded-lg transition-colors"
-                            >
-                              {installing === plugin.name
-                                ? 'Installing...'
-                                : hasUpdate
-                                  ? `Update to v${plugin.latest_version}`
-                                  : 'Install'}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {section.plugins.map((plugin) => (
+                    <FullCard
+                      key={plugin.name}
+                      plugin={plugin}
+                      installed={isInstalledForTarget(plugin.name)}
+                      installedVersion={getInstalledVersion(plugin.name)}
+                      installing={installing === plugin.name}
+                      onInstall={() => handleInstall(plugin.name)}
+                    />
+                  ))}
                 </div>
               )}
             </div>
@@ -355,6 +296,108 @@ export default function CatalogPage({ license }: Props) {
           </a>
           {' '}to learn how to use plugins with Claude Code and Cowork.
         </p>
+      </div>
+    </div>
+  );
+}
+
+function CompactCard({ plugin, installed, installedVersion, installing, onInstall }: {
+  plugin: PluginInfo;
+  installed: boolean;
+  installedVersion: string | undefined;
+  installing: boolean;
+  onInstall: () => void;
+}) {
+  const hasUpdate = installed && installedVersion !== plugin.latest_version;
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 hover:border-gray-700 transition-colors">
+      <div className="flex items-center justify-between mb-1">
+        <h4 className="text-xs font-medium text-white">
+          {SHORT_LABELS[plugin.name] || plugin.name.replace('forge-', '')}
+        </h4>
+        <span className="text-[9px] text-gray-600 font-mono">v{plugin.latest_version}</span>
+      </div>
+      <p className="text-[10px] text-gray-500 line-clamp-2 mb-2 min-h-[2rem]">
+        {plugin.description}
+      </p>
+      {installed && !hasUpdate ? (
+        <span className="inline-flex items-center gap-1 text-[10px] text-green-400">
+          <span className="w-1 h-1 bg-green-400 rounded-full" />
+          v{installedVersion}
+        </span>
+      ) : (
+        <button
+          onClick={onInstall}
+          disabled={installing}
+          className="px-2.5 py-1 bg-forge-600 hover:bg-forge-700 disabled:bg-gray-800 disabled:text-gray-600 text-white text-[10px] rounded transition-colors"
+        >
+          {installing ? '...' : hasUpdate ? 'Update' : 'Install'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FullCard({ plugin, installed, installedVersion, installing, onInstall }: {
+  plugin: PluginInfo;
+  installed: boolean;
+  installedVersion: string | undefined;
+  installing: boolean;
+  onInstall: () => void;
+}) {
+  const hasUpdate = installed && installedVersion !== plugin.latest_version;
+  const isCore = plugin.name === 'forge-core';
+  const isHub = plugin.name === 'forge-product';
+
+  return (
+    <div className={`bg-gray-900 border rounded-xl p-5 hover:border-gray-700 transition-colors ${
+      isCore ? 'border-forge-600/30' : 'border-gray-800'
+    }`}>
+      <div className="flex items-start justify-between">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-medium text-white">{plugin.name}</h4>
+            {isCore && (
+              <span className="text-[9px] px-1.5 py-0.5 bg-forge-600/20 text-forge-300 rounded">
+                required
+              </span>
+            )}
+            {isHub && (
+              <span className="text-[9px] px-1.5 py-0.5 bg-purple-600/20 text-purple-300 rounded">
+                hub
+              </span>
+            )}
+          </div>
+        </div>
+        <span className="text-[10px] text-gray-600 font-mono ml-2">
+          v{plugin.latest_version}
+        </span>
+      </div>
+
+      <p className="text-xs text-gray-500 mt-2 line-clamp-2">
+        {plugin.description || 'No description available'}
+      </p>
+
+      <div className="mt-4">
+        {installed && !hasUpdate ? (
+          <span className="inline-flex items-center gap-1.5 text-xs text-green-400">
+            <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
+            Installed (v{installedVersion})
+          </span>
+        ) : (
+          <button
+            onClick={onInstall}
+            disabled={installing}
+            className="px-4 py-1.5 bg-forge-600 hover:bg-forge-700 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs rounded-lg transition-colors"
+          >
+            {installing
+              ? 'Installing...'
+              : hasUpdate
+                ? `Update to v${plugin.latest_version}`
+                : 'Install'}
+          </button>
+        )}
       </div>
     </div>
   );

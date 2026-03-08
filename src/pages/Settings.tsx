@@ -73,20 +73,20 @@ export default function SettingsPage({ license, onDeactivated }: Props) {
       {appInfo && (
         <Section title="Environment">
           <InfoRow
-            label="Claude Code"
-            value={appInfo.targets.claude_code ? 'Detected' : 'Not found'}
-            warn={!appInfo.targets.claude_code}
-          />
-          {appInfo.targets.claude_code_path && (
-            <InfoRow label="" value={appInfo.targets.claude_code_path} mono small />
-          )}
-          <InfoRow
             label="Claude Cowork"
             value={appInfo.targets.claude_cowork ? 'Detected' : 'Not found'}
             warn={!appInfo.targets.claude_cowork}
           />
           {appInfo.targets.cowork_path && (
             <InfoRow label="" value={appInfo.targets.cowork_path} mono small />
+          )}
+          <InfoRow
+            label="Claude Code"
+            value={appInfo.targets.claude_code ? 'Detected' : 'Not found'}
+            warn={!appInfo.targets.claude_code}
+          />
+          {appInfo.targets.claude_code_path && (
+            <InfoRow label="" value={appInfo.targets.claude_code_path} mono small />
           )}
           {appInfo.config_dir && (
             <InfoRow label="Plugin storage" value={appInfo.config_dir} mono small />

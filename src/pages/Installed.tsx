@@ -151,16 +151,16 @@ export default function InstalledPage() {
         <div className="mb-5 flex items-center gap-3">
           <span className="text-xs text-gray-500">Integrated with:</span>
           <div className="flex items-center gap-2">
-            {appInfo.targets.claude_code && (
-              <span className="inline-flex items-center gap-1.5 text-xs text-green-400">
-                <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                Claude Code
-              </span>
-            )}
             {appInfo.targets.claude_cowork && (
               <span className="inline-flex items-center gap-1.5 text-xs text-green-400">
                 <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
                 Claude Cowork
+              </span>
+            )}
+            {appInfo.targets.claude_code && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-green-400">
+                <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
+                Claude Code
               </span>
             )}
             {!appInfo.targets.claude_code && !appInfo.targets.claude_cowork && (
@@ -230,20 +230,6 @@ export default function InstalledPage() {
 
                 {/* Target badges + remove buttons */}
                 <div className="mt-3 flex items-center gap-2 flex-wrap">
-                  {inCode && (
-                    <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded text-[10px]">
-                      <span className="w-1.5 h-1.5 bg-blue-400 rounded-full" />
-                      <span className="text-blue-300">Code</span>
-                      <button
-                        onClick={() => handleUninstall(plugin.name, 'claude-code')}
-                        disabled={actionPlugin === plugin.name}
-                        className="text-blue-600 hover:text-red-400 ml-1"
-                        title="Remove from Claude Code"
-                      >
-                        &times;
-                      </button>
-                    </div>
-                  )}
                   {inCowork && (
                     <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-purple-500/10 border border-purple-500/20 rounded text-[10px]">
                       <span className="w-1.5 h-1.5 bg-purple-400 rounded-full" />
@@ -253,6 +239,20 @@ export default function InstalledPage() {
                         disabled={actionPlugin === plugin.name}
                         className="text-purple-600 hover:text-red-400 ml-1"
                         title="Remove from Claude Cowork"
+                      >
+                        &times;
+                      </button>
+                    </div>
+                  )}
+                  {inCode && (
+                    <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded text-[10px]">
+                      <span className="w-1.5 h-1.5 bg-blue-400 rounded-full" />
+                      <span className="text-blue-300">Code</span>
+                      <button
+                        onClick={() => handleUninstall(plugin.name, 'claude-code')}
+                        disabled={actionPlugin === plugin.name}
+                        className="text-blue-600 hover:text-red-400 ml-1"
+                        title="Remove from Claude Code"
                       >
                         &times;
                       </button>
