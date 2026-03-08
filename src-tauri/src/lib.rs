@@ -12,14 +12,6 @@ pub fn run() {
         .manage(AppState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .setup(|_app| {
-            #[cfg(desktop)]
-            {
-                _app.handle()
-                    .plugin(tauri_plugin_updater::Builder::new().build())?;
-            }
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             activate_license,
             deactivate_license,
