@@ -147,10 +147,10 @@ pub async fn install_plugin(
     // Download the zip file
     let zip_data = reqwest::get(&download.download_url)
         .await
-        .map_err(|e| AppError::Network(e))?
+        .map_err(AppError::Network)?
         .bytes()
         .await
-        .map_err(|e| AppError::Network(e))?;
+        .map_err(AppError::Network)?;
 
     // Install to Cowork directory
     cowork::install_plugin_from_zip(

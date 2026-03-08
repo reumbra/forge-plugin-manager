@@ -58,13 +58,9 @@ pub struct InstalledPlugin {
 /// macOS: ~/Library/Application Support/Claude/local-agent-mode-sessions/
 /// Linux: ~/.config/Claude/local-agent-mode-sessions/
 pub fn detect_cowork_base() -> Result<PathBuf, AppError> {
-    let base = if cfg!(target_os = "windows") {
-        dirs::config_dir() // %APPDATA%
-    } else if cfg!(target_os = "macos") {
-        dirs::config_dir() // ~/Library/Application Support
-    } else {
-        dirs::config_dir() // ~/.config
-    };
+    // dirs::config_dir() returns the correct path per OS:
+    // Windows: %APPDATA%, macOS: ~/Library/Application Support, Linux: ~/.config
+    let base = dirs::config_dir();
 
     let base = base.ok_or_else(|| AppError::CoworkNotFound("Cannot determine config directory".into()))?;
     let claude_dir = base.join("Claude").join("local-agent-mode-sessions");
