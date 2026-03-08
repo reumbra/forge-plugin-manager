@@ -98,6 +98,32 @@ async function apiGet<T>(path: string, params: Record<string, string>): Promise<
   return data as T;
 }
 
+async function authedGet<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const url = new URL(`${API_BASE}${path}`);
+  if (params) for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const resp = await fetch(url.toString(), {
+    headers: { 'x-license-key': webLicenseKey!, 'x-machine-id': webMachineId },
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `API error ${resp.status}`);
+  return data as T;
+}
+
+async function authedPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const resp = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-license-key': webLicenseKey!,
+      'x-machine-id': webMachineId,
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `API error ${resp.status}`);
+  return data as T;
+}
+
 // API functions — dual mode (Tauri invoke / Web fetch)
 
 export async function activateLicense(licenseKey: string): Promise<LicenseInfo> {
@@ -109,12 +135,19 @@ export async function activateLicense(licenseKey: string): Promise<LicenseInfo> 
     const { invoke } = await import('@tauri-apps/api/core');
     return invoke('activate_license', { licenseKey });
   }
-  const info = await apiPost<LicenseInfo>('/auth/activate', {
+  const resp = await apiPost<{ success: boolean; license: { plan: string; expires_at: string; machines_used: number; max_machines: number } }>('/auth/activate', {
     license_key: licenseKey,
     machine_id: webMachineId,
   });
   webLicenseKey = licenseKey;
-  return info;
+  return {
+    license_key: licenseKey,
+    plan: resp.license.plan,
+    is_active: true,
+    expires_at: resp.license.expires_at,
+    machines: [{ machine_id: webMachineId, activated_at: new Date().toISOString() }],
+    max_machines: resp.license.max_machines,
+  };
 }
 
 export async function deactivateLicense(): Promise<void> {
@@ -138,10 +171,18 @@ export async function getLicenseStatus(): Promise<LicenseInfo> {
     return invoke('get_license_status');
   }
   if (!webLicenseKey) throw new Error('No license activated');
-  return apiGet<LicenseInfo>('/auth/status', {
+  const resp = await apiGet<{ valid: boolean; license: { plan: string; email: string; expires_at: string; is_active: boolean; machines: { machine_id: string; activated_at: string | null }[]; allowed_plugins: string[] } }>('/auth/status', {
     license_key: webLicenseKey,
     machine_id: webMachineId,
   });
+  return {
+    license_key: webLicenseKey,
+    plan: resp.license.plan,
+    is_active: resp.license.is_active,
+    expires_at: resp.license.expires_at,
+    machines: resp.license.machines.map(m => ({ machine_id: m.machine_id, activated_at: m.activated_at || '' })),
+    max_machines: 3,
+  };
 }
 
 export async function getPluginCatalog(): Promise<PluginInfo[]> {
@@ -151,10 +192,7 @@ export async function getPluginCatalog(): Promise<PluginInfo[]> {
     return invoke('get_plugin_catalog');
   }
   if (!webLicenseKey) throw new Error('No license activated');
-  const data = await apiGet<{ plugins: PluginInfo[] }>('/plugins/list', {
-    license_key: webLicenseKey,
-    machine_id: webMachineId,
-  });
+  const data = await authedGet<{ plugins: PluginInfo[] }>('/plugins/list');
   return data.plugins;
 }
 
