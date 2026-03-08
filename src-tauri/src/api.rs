@@ -71,6 +71,7 @@ struct ActivateResponse {
 struct ActivateLicense {
     plan: String,
     expires_at: String,
+    #[allow(dead_code)]
     machines_used: i32,
     max_machines: i32,
 }
