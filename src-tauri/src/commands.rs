@@ -241,6 +241,7 @@ pub async fn send_feedback(
         .api
         .send_feedback(FeedbackRequest {
             license_key: key,
+            machine_id: state.machine_id.clone(),
             feedback_type,
             message,
             metadata: Some(serde_json::json!({

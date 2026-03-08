@@ -49,6 +49,7 @@ pub struct DownloadResponse {
 #[derive(Debug, Serialize)]
 pub struct FeedbackRequest {
     pub license_key: Option<String>,
+    pub machine_id: String,
     pub feedback_type: String,
     pub message: String,
     pub metadata: Option<serde_json::Value>,
@@ -91,6 +92,7 @@ struct StatusLicense {
     expires_at: String,
     is_active: bool,
     machines: Vec<StatusMachine>,
+    max_machines: Option<i32>,
     #[allow(dead_code)]
     allowed_plugins: Vec<String>,
 }
@@ -197,7 +199,7 @@ impl ApiClient {
                     activated_at: m.activated_at.unwrap_or_default(),
                 })
                 .collect(),
-            max_machines: 3,
+            max_machines: data.license.max_machines.unwrap_or(3),
         })
     }
 
@@ -249,13 +251,24 @@ impl ApiClient {
         &self,
         feedback: FeedbackRequest,
     ) -> Result<serde_json::Value, AppError> {
-        let resp = self
+        let mut builder = self
             .client
-            .post(format!("{}/feedback", self.base_url))
-            .json(&feedback)
-            .send()
-            .await?;
+            .post(format!("{}/feedback", self.base_url));
 
+        if let Some(ref key) = feedback.license_key {
+            builder = builder
+                .header("x-license-key", key)
+                .header("x-machine-id", &feedback.machine_id);
+        }
+
+        let body = serde_json::json!({
+            "feedback_type": "direct_feedback",
+            "user_comments": feedback.message,
+            "plugin_name": "plugin-manager",
+            "plugin_version": env!("CARGO_PKG_VERSION"),
+        });
+
+        let resp = builder.json(&body).send().await?;
         self.parse_response(resp).await
     }
 
