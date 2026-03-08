@@ -225,6 +225,7 @@ pub fn find_cowork_plugins_dir() -> Option<PathBuf> {
 }
 
 /// Claude Code plugins directory: ~/.claude/plugins/
+#[allow(dead_code)]
 pub fn claude_code_plugins_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join("plugins"))
 }
