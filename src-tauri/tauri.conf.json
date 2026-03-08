@@ -10,7 +10,6 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "title": "Forge Plugin Manager",
     "windows": [
       {
         "label": "main",
@@ -44,12 +43,5 @@
       "timestampUrl": ""
     }
   },
-  "plugins": {
-    "updater": {
-      "endpoints": [
-        "https://github.com/maselious/forge-plugin-manager/releases/latest/download/latest.json"
-      ],
-      "pubkey": ""
-    }
-  }
+  "plugins": {}
 }
