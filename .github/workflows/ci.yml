@@ -37,7 +37,7 @@ jobs:
         run: pnpm install
 
       - name: Generate icons
-        run: pnpm tauri icon public/forge-icon.svg
+        run: pnpm tauri icon src-tauri/icons/source-icon.png
 
       - name: TypeScript check
         run: pnpm exec tsc --noEmit
