@@ -1,6 +1,6 @@
 [package]
 name = "forge-plugin-manager"
-version = "0.1.1"
+version = "0.2.0"
 description = "Tauri-based plugin manager for Claude Cowork"
 authors = ["Reumbra"]
 edition = "2021"
