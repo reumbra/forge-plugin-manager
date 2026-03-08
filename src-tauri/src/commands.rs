@@ -1,32 +1,29 @@
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::api::{ApiClient, FeedbackRequest, LicenseInfo, PluginInfo};
-use crate::cowork::{self, InstalledPlugin};
 use crate::error::AppError;
 use crate::machine;
+use crate::storage::{self, InstalledPlugin, TargetInfo};
 
 /// App state managed by Tauri
 pub struct AppState {
     pub api: ApiClient,
     pub license_key: Mutex<Option<String>>,
     pub machine_id: String,
-    pub cowork_path: Mutex<Option<PathBuf>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        // Try to auto-detect cowork path
-        let cowork_path = cowork::detect_cowork_base().ok();
+        // Load persisted license key from config
+        let config = storage::load_config().unwrap_or_default();
 
         Self {
             api: ApiClient::new(),
-            license_key: Mutex::new(None),
+            license_key: Mutex::new(config.license_key),
             machine_id: machine::get_machine_id(),
-            cowork_path: Mutex::new(cowork_path),
         }
     }
 }
@@ -35,8 +32,8 @@ impl Default for AppState {
 pub struct AppInfo {
     pub version: String,
     pub machine_id: String,
-    pub cowork_detected: bool,
-    pub cowork_path: Option<String>,
+    pub targets: TargetInfo,
+    pub config_dir: Option<String>,
     pub os: String,
 }
 
@@ -66,7 +63,17 @@ pub async fn activate_license(
         .activate(&license_key, &state.machine_id)
         .await?;
 
-    *state.license_key.lock().unwrap() = Some(license_key);
+    // Persist to memory
+    *state.license_key.lock().unwrap() = Some(license_key.clone());
+
+    // Persist to config.json
+    let mut config = storage::load_config().unwrap_or_default();
+    config.license_key = Some(license_key);
+    config.machine_id = Some(state.machine_id.clone());
+    config.plan = Some(info.plan.clone());
+    config.expires_at = Some(info.expires_at.clone());
+    storage::save_config(&config)?;
+
     Ok(info)
 }
 
@@ -82,7 +89,17 @@ pub async fn deactivate_license(
         .ok_or_else(|| AppError::License("No license activated".into()))?;
 
     let result = state.api.deactivate(&key, &state.machine_id).await?;
+
+    // Clear from memory
     *state.license_key.lock().unwrap() = None;
+
+    // Clear from config.json
+    let mut config = storage::load_config().unwrap_or_default();
+    config.license_key = None;
+    config.plan = None;
+    config.expires_at = None;
+    storage::save_config(&config)?;
+
     Ok(result)
 }
 
@@ -126,13 +143,6 @@ pub async fn install_plugin(
         .clone()
         .ok_or_else(|| AppError::License("No license activated".into()))?;
 
-    let cowork_path = state
-        .cowork_path
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::CoworkNotFound("Cowork path not configured".into()))?;
-
     // Get download URL from API
     let download = state
         .api
@@ -152,9 +162,8 @@ pub async fn install_plugin(
         .await
         .map_err(AppError::Network)?;
 
-    // Install to Cowork directory
-    cowork::install_plugin_from_zip(
-        &cowork_path,
+    // Install to marketplace directory
+    storage::install_plugin_from_zip(
         &request.plugin_name,
         &download.version,
         &zip_data,
@@ -164,30 +173,13 @@ pub async fn install_plugin(
 #[tauri::command]
 pub async fn uninstall_plugin(
     plugin_name: String,
-    state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let cowork_path = state
-        .cowork_path
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::CoworkNotFound("Cowork path not configured".into()))?;
-
-    cowork::uninstall_plugin(&cowork_path, &plugin_name)
+    storage::uninstall_plugin(&plugin_name)
 }
 
 #[tauri::command]
-pub async fn get_installed_plugins(
-    state: State<'_, AppState>,
-) -> Result<Vec<InstalledPlugin>, AppError> {
-    let cowork_path = state
-        .cowork_path
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::CoworkNotFound("Cowork path not configured".into()))?;
-
-    cowork::list_installed(&cowork_path)
+pub async fn get_installed_plugins() -> Result<Vec<InstalledPlugin>, AppError> {
+    storage::list_installed()
 }
 
 #[tauri::command]
@@ -201,14 +193,7 @@ pub async fn check_plugin_updates(
         .clone()
         .ok_or_else(|| AppError::License("No license activated".into()))?;
 
-    let cowork_path = state
-        .cowork_path
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::CoworkNotFound("Cowork path not configured".into()))?;
-
-    let installed = cowork::list_installed(&cowork_path)?;
+    let installed = storage::list_installed()?;
     let catalog = state.api.list_plugins(&key, &state.machine_id).await?;
 
     let updates: Vec<PluginUpdateInfo> = installed
@@ -233,25 +218,14 @@ pub async fn check_plugin_updates(
 }
 
 #[tauri::command]
-pub fn get_cowork_path(state: State<'_, AppState>) -> Option<String> {
-    state
-        .cowork_path
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|p| p.display().to_string())
+pub fn get_cowork_path() -> Option<String> {
+    let targets = storage::detect_targets();
+    targets.cowork_path
 }
 
 #[tauri::command]
-pub fn set_cowork_path(path: String, state: State<'_, AppState>) -> Result<(), AppError> {
-    let path = PathBuf::from(&path);
-    if !path.exists() {
-        return Err(AppError::CoworkNotFound(format!(
-            "Path does not exist: {}",
-            path.display()
-        )));
-    }
-    *state.cowork_path.lock().unwrap() = Some(path);
+pub fn set_cowork_path(_path: String) -> Result<(), AppError> {
+    // Legacy command — kept for frontend compat, no-op now
     Ok(())
 }
 
@@ -280,12 +254,11 @@ pub async fn send_feedback(
 
 #[tauri::command]
 pub fn get_app_info(state: State<'_, AppState>) -> AppInfo {
-    let cowork = state.cowork_path.lock().unwrap();
     AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         machine_id: state.machine_id.clone(),
-        cowork_detected: cowork.is_some(),
-        cowork_path: cowork.as_ref().map(|p| p.display().to_string()),
+        targets: storage::detect_targets(),
+        config_dir: storage::config_dir().ok().map(|p| p.display().to_string()),
         os: std::env::consts::OS.to_string(),
     }
 }

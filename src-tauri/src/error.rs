@@ -17,9 +17,6 @@ pub enum AppError {
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
 
-    #[error("Cowork not found: {0}")]
-    CoworkNotFound(String),
-
     #[error("License error: {0}")]
     License(String),
 

@@ -13,7 +13,7 @@ pub fn get_machine_id() -> String {
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
 
-    let input = format!("{}{}{}", host, os, user);
+    let input = format!("{}|{}|{}", host, os, user);
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     format!("{:x}", hasher.finalize())

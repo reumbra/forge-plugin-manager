@@ -37,11 +37,18 @@ export interface PluginUpdateInfo {
   has_update: boolean;
 }
 
+export interface TargetInfo {
+  claude_code: boolean;
+  claude_cowork: boolean;
+  claude_code_path: string | null;
+  cowork_path: string | null;
+}
+
 export interface AppInfo {
   version: string;
   machine_id: string;
-  cowork_detected: boolean;
-  cowork_path: string | null;
+  targets: TargetInfo;
+  config_dir: string | null;
   os: string;
 }
 
@@ -265,10 +272,10 @@ export async function getAppInfo(): Promise<AppInfo> {
     return invoke('get_app_info');
   }
   return {
-    version: '0.1.0 (web)',
+    version: '0.1.1 (web)',
     machine_id: webMachineId,
-    cowork_detected: false,
-    cowork_path: null,
+    targets: { claude_code: false, claude_cowork: false, claude_code_path: null, cowork_path: null },
+    config_dir: null,
     os: navigator.platform,
   };
 }

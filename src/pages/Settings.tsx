@@ -108,9 +108,14 @@ export default function SettingsPage({ license, onDeactivated }: Props) {
           <InfoRow label="OS" value={appInfo.os} />
           <InfoRow label="Machine ID" value={appInfo.machine_id.slice(0, 16) + '...'} mono />
           <InfoRow
-            label="Cowork"
-            value={appInfo.cowork_detected ? 'Detected' : 'Not found'}
-            warn={!appInfo.cowork_detected}
+            label="Claude Code"
+            value={appInfo.targets.claude_code ? 'Detected' : 'Not found'}
+            warn={!appInfo.targets.claude_code}
+          />
+          <InfoRow
+            label="Claude Cowork"
+            value={appInfo.targets.claude_cowork ? 'Detected' : 'Not found'}
+            warn={!appInfo.targets.claude_cowork}
           />
         </Section>
       )}
