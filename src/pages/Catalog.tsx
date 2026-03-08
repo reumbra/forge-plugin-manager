@@ -8,13 +8,12 @@ import {
   type InstalledPlugin,
   type LicenseInfo,
   type AppInfo,
+  type InstallTarget,
 } from '../lib/api';
 
 interface Props {
   license: LicenseInfo;
 }
-
-type InstallTarget = 'claude-code' | 'claude-cowork';
 
 // Dependency graph — defines catalog structure
 const CATALOG_SECTIONS = [
@@ -87,6 +86,7 @@ export default function CatalogPage({ license }: Props) {
       setInstalled(inst);
       setAppInfo(info);
 
+      // Auto-select available target
       if (info) {
         if (info.targets.claude_code && !info.targets.claude_cowork) setTarget('claude-code');
         else if (!info.targets.claude_code && info.targets.claude_cowork) setTarget('claude-cowork');
@@ -103,15 +103,12 @@ export default function CatalogPage({ license }: Props) {
     setError('');
     setSuccessMsg('');
     try {
-      await installPlugin(pluginName);
+      await installPlugin(pluginName, target);
       const inst = await getInstalledPlugins().catch(() => []);
       setInstalled(inst);
 
-      if (target === 'claude-code') {
-        setSuccessMsg(`${pluginName} installed. Restart your Claude Code session to load it.`);
-      } else {
-        setSuccessMsg(`${pluginName} installed. Restart the Claude Cowork app to load it.`);
-      }
+      const targetLabel = target === 'claude-code' ? 'Claude Code' : 'Claude Cowork';
+      setSuccessMsg(`${pluginName} installed to ${targetLabel}. Restart your session to load it.`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -120,7 +117,10 @@ export default function CatalogPage({ license }: Props) {
   };
 
   const getPlugin = (name: string) => plugins.find((p) => p.name === name);
-  const isInstalled = (name: string) => installed.some((p) => p.name === name);
+  const isInstalledForTarget = (name: string) => {
+    const plugin = installed.find((p) => p.name === name);
+    return plugin?.targets?.includes(target) ?? false;
+  };
   const getInstalledVersion = (name: string) => installed.find((p) => p.name === name)?.version;
 
   const hasTargets = appInfo && (appInfo.targets.claude_code || appInfo.targets.claude_cowork);
@@ -206,7 +206,7 @@ export default function CatalogPage({ license }: Props) {
 
           if (sectionPlugins.length === 0) return null;
 
-          const requiresMet = !('requires' in section) || isInstalled(section.requires!);
+          const requiresMet = !('requires' in section) || isInstalledForTarget(section.requires!);
 
           return (
             <div key={section.id}>
@@ -230,7 +230,7 @@ export default function CatalogPage({ license }: Props) {
                 // Compact grid for advisors
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   {sectionPlugins.map((plugin) => {
-                    const pluginInstalled = isInstalled(plugin.name);
+                    const pluginInstalled = isInstalledForTarget(plugin.name);
                     const installedVersion = getInstalledVersion(plugin.name);
                     const hasUpdate = pluginInstalled && installedVersion !== plugin.latest_version;
 
@@ -274,7 +274,7 @@ export default function CatalogPage({ license }: Props) {
                 // Full cards for foundations and devtools
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {sectionPlugins.map((plugin) => {
-                    const pluginInstalled = isInstalled(plugin.name);
+                    const pluginInstalled = isInstalledForTarget(plugin.name);
                     const installedVersion = getInstalledVersion(plugin.name);
                     const hasUpdate = pluginInstalled && installedVersion !== plugin.latest_version;
                     const isCore = plugin.name === 'forge-core';

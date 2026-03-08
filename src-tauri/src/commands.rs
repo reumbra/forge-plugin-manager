@@ -6,7 +6,7 @@ use tauri::State;
 use crate::api::{ApiClient, FeedbackRequest, LicenseInfo, PluginInfo};
 use crate::error::AppError;
 use crate::machine;
-use crate::storage::{self, InstalledPlugin, TargetInfo};
+use crate::storage::{self, InstalledPlugin, InstallTarget, TargetInfo};
 
 /// App state managed by Tauri
 pub struct AppState {
@@ -41,6 +41,7 @@ pub struct AppInfo {
 pub struct InstallRequest {
     pub plugin_name: String,
     pub version: Option<String>,
+    pub target: InstallTarget,
 }
 
 #[derive(Serialize)]
@@ -162,19 +163,21 @@ pub async fn install_plugin(
         .await
         .map_err(AppError::Network)?;
 
-    // Install to marketplace directory
+    // Install to marketplace directory for the selected target
     storage::install_plugin_from_zip(
         &request.plugin_name,
         &download.version,
         &zip_data,
+        request.target,
     )
 }
 
 #[tauri::command]
 pub async fn uninstall_plugin(
     plugin_name: String,
+    target: InstallTarget,
 ) -> Result<(), AppError> {
-    storage::uninstall_plugin(&plugin_name)
+    storage::uninstall_plugin(&plugin_name, target)
 }
 
 #[tauri::command]

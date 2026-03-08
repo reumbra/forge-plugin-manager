@@ -6,6 +6,7 @@ import {
   checkPluginUpdates,
   installPlugin,
   type InstalledPlugin,
+  type InstallTarget,
   type PluginUpdateInfo,
   type AppInfo,
 } from '../lib/api';
@@ -42,12 +43,13 @@ export default function InstalledPage() {
     }
   };
 
-  const handleUninstall = async (name: string) => {
-    if (!confirm(`Remove ${name}?`)) return;
+  const handleUninstall = async (name: string, fromTarget: InstallTarget) => {
+    const targetLabel = fromTarget === 'claude-code' ? 'Claude Code' : 'Claude Cowork';
+    if (!confirm(`Remove ${name} from ${targetLabel}?`)) return;
     setActionPlugin(name);
     setSuccessMsg('');
     try {
-      await uninstallPlugin(name);
+      await uninstallPlugin(name, fromTarget);
       await loadData();
     } catch (err) {
       setError(String(err));
@@ -63,7 +65,7 @@ export default function InstalledPage() {
     try {
       await installPlugin(name);
       await loadData();
-      showRestartMessage(name);
+      setSuccessMsg(`${name} updated. Restart your Claude session to load changes.`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -96,25 +98,12 @@ export default function InstalledPage() {
     await loadData();
 
     if (updated.length > 0) {
-      showRestartMessage(updated.join(', '));
-    }
-  };
-
-  const showRestartMessage = (names: string) => {
-    if (appInfo?.targets.claude_cowork) {
-      setSuccessMsg(`${names} updated. Restart the Claude Cowork app to load changes.`);
-    } else {
-      setSuccessMsg(`${names} updated. Restart your Claude Code session to load changes.`);
+      setSuccessMsg(`${updated.join(', ')} updated. Restart your Claude session to load changes.`);
     }
   };
 
   const getUpdate = (name: string) => updates.find((u) => u.name === name && u.has_update);
-
   const updatableCount = updates.filter((u) => u.has_update).length;
-
-  // Group plugins by environment
-  const claudeCodePlugins = plugins; // All installed plugins go through marketplace
-  const hasCowork = appInfo?.targets.claude_cowork;
 
   if (loading) {
     return (
@@ -157,6 +146,30 @@ export default function InstalledPage() {
         </div>
       </div>
 
+      {/* Detected environments */}
+      {appInfo && (
+        <div className="mb-5 flex items-center gap-3">
+          <span className="text-xs text-gray-500">Integrated with:</span>
+          <div className="flex items-center gap-2">
+            {appInfo.targets.claude_code && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-green-400">
+                <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
+                Claude Code
+              </span>
+            )}
+            {appInfo.targets.claude_cowork && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-green-400">
+                <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
+                Claude Cowork
+              </span>
+            )}
+            {!appInfo.targets.claude_code && !appInfo.targets.claude_cowork && (
+              <span className="text-xs text-yellow-400">No Claude environment detected</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {successMsg && (
         <div className="mb-4 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-lg flex items-start justify-between">
           <p className="text-green-400 text-xs">{successMsg}</p>
@@ -178,30 +191,80 @@ export default function InstalledPage() {
           <p className="text-xs text-gray-600">Go to Catalog to install plugins.</p>
         </div>
       ) : (
-        <div className="space-y-6">
-          {/* Claude Code section */}
-          <EnvironmentSection
-            title="Claude Code"
-            detected={appInfo?.targets.claude_code ?? false}
-            plugins={claudeCodePlugins}
-            getUpdate={getUpdate}
-            actionPlugin={actionPlugin}
-            onUpdate={handleUpdate}
-            onUninstall={handleUninstall}
-          />
+        <div className="space-y-3">
+          {plugins.map((plugin) => {
+            const update = getUpdate(plugin.name);
+            const targets = plugin.targets || [];
+            const inCode = targets.includes('claude-code');
+            const inCowork = targets.includes('claude-cowork');
 
-          {/* Claude Cowork section — show if detected */}
-          {hasCowork && (
-            <EnvironmentSection
-              title="Claude Cowork"
-              detected
-              plugins={claudeCodePlugins}
-              getUpdate={getUpdate}
-              actionPlugin={actionPlugin}
-              onUpdate={handleUpdate}
-              onUninstall={handleUninstall}
-            />
-          )}
+            return (
+              <div
+                key={plugin.name}
+                className="bg-gray-900 border border-gray-800 rounded-xl p-4"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-medium text-white">{plugin.name}</h3>
+                      <span className="text-[10px] text-gray-600 font-mono">v{plugin.version}</span>
+                      {update && (
+                        <span className="px-1.5 py-0.5 bg-forge-600/20 text-forge-300 text-[10px] rounded">
+                          v{update.latest_version} available
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1 truncate">{plugin.description}</p>
+                  </div>
+
+                  {update && (
+                    <button
+                      onClick={() => handleUpdate(plugin.name)}
+                      disabled={actionPlugin === plugin.name}
+                      className="px-3 py-1.5 bg-forge-600 hover:bg-forge-700 disabled:bg-gray-800 text-white text-xs rounded-lg transition-colors shrink-0"
+                    >
+                      {actionPlugin === plugin.name ? '...' : 'Update'}
+                    </button>
+                  )}
+                </div>
+
+                {/* Target badges + remove buttons */}
+                <div className="mt-3 flex items-center gap-2 flex-wrap">
+                  {inCode && (
+                    <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded text-[10px]">
+                      <span className="w-1.5 h-1.5 bg-blue-400 rounded-full" />
+                      <span className="text-blue-300">Code</span>
+                      <button
+                        onClick={() => handleUninstall(plugin.name, 'claude-code')}
+                        disabled={actionPlugin === plugin.name}
+                        className="text-blue-600 hover:text-red-400 ml-1"
+                        title="Remove from Claude Code"
+                      >
+                        &times;
+                      </button>
+                    </div>
+                  )}
+                  {inCowork && (
+                    <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-purple-500/10 border border-purple-500/20 rounded text-[10px]">
+                      <span className="w-1.5 h-1.5 bg-purple-400 rounded-full" />
+                      <span className="text-purple-300">Cowork</span>
+                      <button
+                        onClick={() => handleUninstall(plugin.name, 'claude-cowork')}
+                        disabled={actionPlugin === plugin.name}
+                        className="text-purple-600 hover:text-red-400 ml-1"
+                        title="Remove from Claude Cowork"
+                      >
+                        &times;
+                      </button>
+                    </div>
+                  )}
+                  {!inCode && !inCowork && (
+                    <span className="text-[10px] text-gray-600">Not integrated (files only)</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -218,81 +281,6 @@ export default function InstalledPage() {
             Forge Setup Guides
           </a>
         </p>
-      </div>
-    </div>
-  );
-}
-
-function EnvironmentSection({
-  title,
-  detected,
-  plugins,
-  getUpdate,
-  actionPlugin,
-  onUpdate,
-  onUninstall,
-}: {
-  title: string;
-  detected: boolean;
-  plugins: InstalledPlugin[];
-  getUpdate: (name: string) => PluginUpdateInfo | undefined;
-  actionPlugin: string | null;
-  onUpdate: (name: string) => void;
-  onUninstall: (name: string) => void;
-}) {
-  return (
-    <div>
-      <div className="flex items-center gap-2 mb-3">
-        <div className={`w-2 h-2 rounded-full ${detected ? 'bg-green-500' : 'bg-gray-600'}`} />
-        <h3 className="text-sm font-medium text-gray-300">{title}</h3>
-        {!detected && (
-          <span className="text-[10px] text-gray-600">(not detected)</span>
-        )}
-      </div>
-
-      <div className="space-y-3">
-        {plugins.map((plugin) => {
-          const update = getUpdate(plugin.name);
-
-          return (
-            <div
-              key={`${title}-${plugin.name}`}
-              className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center gap-4"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-medium text-white">{plugin.name}</h3>
-                  <span className="text-[10px] text-gray-600 font-mono">v{plugin.version}</span>
-                  {update && (
-                    <span className="px-1.5 py-0.5 bg-forge-600/20 text-forge-300 text-[10px] rounded">
-                      v{update.latest_version} available
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-gray-500 mt-1 truncate">{plugin.description}</p>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                {update && (
-                  <button
-                    onClick={() => onUpdate(plugin.name)}
-                    disabled={actionPlugin === plugin.name}
-                    className="px-3 py-1.5 bg-forge-600 hover:bg-forge-700 disabled:bg-gray-800 text-white text-xs rounded-lg transition-colors"
-                  >
-                    {actionPlugin === plugin.name ? '...' : 'Update'}
-                  </button>
-                )}
-                <button
-                  onClick={() => onUninstall(plugin.name)}
-                  disabled={actionPlugin === plugin.name}
-                  className="px-3 py-1.5 text-xs text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 rounded-lg transition-colors"
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          );
-        })}
       </div>
     </div>
   );

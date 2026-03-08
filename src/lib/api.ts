@@ -21,6 +21,8 @@ export interface PluginInfo {
   category: string | null;
 }
 
+export type InstallTarget = 'claude-code' | 'claude-cowork';
+
 export interface InstalledPlugin {
   name: string;
   version: string;
@@ -28,6 +30,7 @@ export interface InstalledPlugin {
   marketplace: string;
   installed_at: string;
   install_path: string;
+  targets: string[];
 }
 
 export interface PluginUpdateInfo {
@@ -195,10 +198,10 @@ export async function getPluginCatalog(): Promise<PluginInfo[]> {
   }));
 }
 
-export async function installPlugin(pluginName: string, version?: string): Promise<InstalledPlugin> {
+export async function installPlugin(pluginName: string, target: InstallTarget = 'claude-code', version?: string): Promise<InstalledPlugin> {
   if (isTauri) {
     const { invoke } = await import('@tauri-apps/api/core');
-    return invoke('install_plugin', { request: { plugin_name: pluginName, version } });
+    return invoke('install_plugin', { request: { plugin_name: pluginName, version, target } });
   }
   // Web mode can't install locally — just simulate success
   return {
@@ -208,13 +211,14 @@ export async function installPlugin(pluginName: string, version?: string): Promi
     marketplace: 'reumbra-plugins',
     installed_at: new Date().toISOString(),
     install_path: 'web-mode/not-installed',
+    targets: [target],
   };
 }
 
-export async function uninstallPlugin(pluginName: string): Promise<void> {
+export async function uninstallPlugin(pluginName: string, target: InstallTarget = 'claude-code'): Promise<void> {
   if (isTauri) {
     const { invoke } = await import('@tauri-apps/api/core');
-    return invoke('uninstall_plugin', { pluginName });
+    return invoke('uninstall_plugin', { pluginName, target });
   }
   // Web mode — no-op
 }

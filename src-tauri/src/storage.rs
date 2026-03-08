@@ -156,6 +156,13 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), AppError> {
 
 // --- Target detection ---
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstallTarget {
+    ClaudeCode,
+    ClaudeCowork,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct TargetInfo {
     pub claude_code: bool,
@@ -166,22 +173,60 @@ pub struct TargetInfo {
 
 pub fn detect_targets() -> TargetInfo {
     let home = dirs::home_dir();
-    let config = dirs::config_dir();
 
     // Claude Code: ~/.claude/
     let claude_code_path = home.as_ref().map(|h| h.join(".claude"));
     let claude_code = claude_code_path.as_ref().is_some_and(|p| p.exists());
 
-    // Claude Cowork: {config_dir}/Claude/local-agent-mode-sessions/
-    let cowork_path = config.as_ref().map(|c| c.join("Claude").join("local-agent-mode-sessions"));
-    let claude_cowork = cowork_path.as_ref().is_some_and(|p| p.exists());
+    // Claude Cowork: {config_dir}/Claude/local-agent-mode-sessions/{session}/{user}/cowork_plugins/
+    let cowork_plugins = find_cowork_plugins_dir();
+    let claude_cowork = cowork_plugins.is_some();
 
     TargetInfo {
         claude_code,
         claude_cowork,
         claude_code_path: if claude_code { claude_code_path.map(|p| p.display().to_string()) } else { None },
-        cowork_path: if claude_cowork { cowork_path.map(|p| p.display().to_string()) } else { None },
+        cowork_path: cowork_plugins.map(|p| p.display().to_string()),
     }
+}
+
+/// Find the cowork_plugins directory by scanning local-agent-mode-sessions/{session}/{user}/
+/// Returns the first cowork_plugins dir found (typically there's one session with one user).
+pub fn find_cowork_plugins_dir() -> Option<PathBuf> {
+    let config = dirs::config_dir()?;
+    let sessions_dir = config.join("Claude").join("local-agent-mode-sessions");
+    if !sessions_dir.exists() {
+        return None;
+    }
+
+    // Scan: sessions_dir/{sessionId}/{userId}/cowork_plugins/
+    for session_entry in fs::read_dir(&sessions_dir).ok()? {
+        let session_entry = session_entry.ok()?;
+        let session_path = session_entry.path();
+        if !session_path.is_dir() || session_entry.file_name() == "skills-plugin" {
+            continue;
+        }
+
+        for user_entry in fs::read_dir(&session_path).ok()? {
+            let user_entry = user_entry.ok()?;
+            let user_path = user_entry.path();
+            if !user_path.is_dir() {
+                continue;
+            }
+
+            let cowork_plugins = user_path.join("cowork_plugins");
+            if cowork_plugins.exists() {
+                return Some(cowork_plugins);
+            }
+        }
+    }
+
+    None
+}
+
+/// Claude Code plugins directory: ~/.claude/plugins/
+pub fn claude_code_plugins_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claude").join("plugins"))
 }
 
 // --- Plugin installation ---
@@ -213,23 +258,23 @@ pub struct InstalledPlugin {
     pub marketplace: String,
     pub installed_at: String,
     pub install_path: String,
+    pub targets: Vec<String>,
 }
 
 pub fn install_plugin_from_zip(
     plugin_name: &str,
     version: &str,
     zip_data: &[u8],
+    target: InstallTarget,
 ) -> Result<InstalledPlugin, AppError> {
+    // Always extract to our own marketplace dir first (source of truth)
     let mkt_dir = marketplace_dir()?;
     let plugin_dir = mkt_dir.join("plugins").join(plugin_name);
 
-    // Remove old version
     if plugin_dir.exists() {
         fs::remove_dir_all(&plugin_dir)?;
     }
     fs::create_dir_all(&plugin_dir)?;
-
-    // Extract zip
     extract_zip(zip_data, &plugin_dir)?;
 
     // Read plugin manifest for description
@@ -243,13 +288,23 @@ pub fn install_plugin_from_zip(
         String::new()
     };
 
-    // Update marketplace.json
+    // Update our marketplace.json
     update_marketplace_manifest(plugin_name, version, &description)?;
 
-    // Integrate with Claude Code
-    integrate_claude_code(plugin_name)?;
+    // Integrate with selected target
+    let mut installed_targets = Vec::new();
+    match target {
+        InstallTarget::ClaudeCode => {
+            integrate_claude_code(plugin_name)?;
+            installed_targets.push("claude-code".to_string());
+        }
+        InstallTarget::ClaudeCowork => {
+            integrate_cowork(plugin_name, version, &description, &plugin_dir)?;
+            installed_targets.push("claude-cowork".to_string());
+        }
+    }
 
-    // Update config
+    // Update our config (tracks what we installed)
     let mut config = load_config()?;
     let now = Utc::now().to_rfc3339();
     config.installed_plugins.insert(
@@ -268,6 +323,7 @@ pub fn install_plugin_from_zip(
         marketplace: MARKETPLACE_NAME.to_string(),
         installed_at: now,
         install_path: plugin_dir.display().to_string(),
+        targets: installed_targets,
     })
 }
 
@@ -338,15 +394,15 @@ fn integrate_claude_code(plugin_name: &str) -> Result<(), AppError> {
     };
 
     let mkt_path = marketplace_dir()?.display().to_string();
-    if km.get(MARKETPLACE_NAME).is_none() {
-        km[MARKETPLACE_NAME] = serde_json::json!({
-            "source": { "source": "directory", "path": mkt_path },
-            "installLocation": mkt_path,
-            "lastUpdated": Utc::now().to_rfc3339()
-        });
-        fs::write(&km_path, serde_json::to_string_pretty(&km)?)?;
-        log::info!("Registered marketplace in Claude Code");
-    }
+    // Always update marketplace path — ensures Claude Code points to the correct
+    // directory even if a previous CLI version registered a legacy path
+    km[MARKETPLACE_NAME] = serde_json::json!({
+        "source": { "source": "directory", "path": mkt_path },
+        "installLocation": mkt_path,
+        "lastUpdated": Utc::now().to_rfc3339()
+    });
+    fs::write(&km_path, serde_json::to_string_pretty(&km)?)?;
+    log::info!("Registered marketplace in Claude Code at {}", mkt_path);
 
     // 2. Enable plugin in settings.json
     let settings_path = claude_dir.join("settings.json");
@@ -393,40 +449,197 @@ fn integrate_claude_code(plugin_name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-pub fn uninstall_plugin(plugin_name: &str) -> Result<(), AppError> {
-    let mkt_dir = marketplace_dir()?;
-    let plugin_dir = mkt_dir.join("plugins").join(plugin_name);
+/// Register marketplace and install plugin in Claude Cowork
+fn integrate_cowork(
+    plugin_name: &str,
+    version: &str,
+    description: &str,
+    source_dir: &Path,
+) -> Result<(), AppError> {
+    let cowork_dir = match find_cowork_plugins_dir() {
+        Some(d) => d,
+        None => {
+            log::warn!("Cowork not detected, skipping integration");
+            return Ok(());
+        }
+    };
 
-    if plugin_dir.exists() {
-        fs::remove_dir_all(&plugin_dir)?;
+    // 1. Copy plugin to marketplaces/reumbra/{plugin_name}/
+    let mkt_plugin_dir = cowork_dir.join("marketplaces").join(MARKETPLACE_NAME).join(plugin_name);
+    if mkt_plugin_dir.exists() {
+        fs::remove_dir_all(&mkt_plugin_dir)?;
     }
+    copy_dir_recursive(source_dir, &mkt_plugin_dir)?;
 
-    // Remove from marketplace.json
-    let manifest_path = mkt_dir.join(".claude-plugin").join("marketplace.json");
-    if manifest_path.exists() {
-        let content = fs::read_to_string(&manifest_path)?;
-        let mut manifest: MarketplaceManifest = serde_json::from_str(&content)?;
-        manifest.plugins.retain(|p| p.name != plugin_name);
-        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+    // 2. Update marketplace.json inside cowork marketplaces
+    let mkt_manifest_path = cowork_dir
+        .join("marketplaces")
+        .join(MARKETPLACE_NAME)
+        .join(".claude-plugin")
+        .join("marketplace.json");
+    fs::create_dir_all(mkt_manifest_path.parent().unwrap())?;
+
+    let mut manifest = if mkt_manifest_path.exists() {
+        let content = fs::read_to_string(&mkt_manifest_path)?;
+        serde_json::from_str(&content)?
+    } else {
+        MarketplaceManifest {
+            name: MARKETPLACE_NAME.to_string(),
+            owner: "Reumbra".to_string(),
+            plugins: Vec::new(),
+        }
+    };
+
+    let source = format!("./{}", plugin_name);
+    if let Some(existing) = manifest.plugins.iter_mut().find(|p| p.name == plugin_name) {
+        existing.source = source;
+        existing.version = Some(version.to_string());
+        existing.description = Some(description.to_string());
+    } else {
+        manifest.plugins.push(MarketplacePlugin {
+            name: plugin_name.to_string(),
+            source,
+            description: Some(description.to_string()),
+            version: Some(version.to_string()),
+        });
     }
+    fs::write(&mkt_manifest_path, serde_json::to_string_pretty(&manifest)?)?;
 
-    // Disable in Claude Code settings
-    if let Some(home) = dirs::home_dir() {
-        let settings_path = home.join(".claude").join("settings.json");
-        if settings_path.exists() {
-            let content = fs::read_to_string(&settings_path)?;
-            let mut settings: serde_json::Value = serde_json::from_str(&content)?;
-            let plugin_key = format!("{}@{}", plugin_name, MARKETPLACE_NAME);
-            if let Some(ep) = settings.get_mut("enabledPlugins") {
-                if let Some(obj) = ep.as_object_mut() {
-                    obj.remove(&plugin_key);
+    // 3. Copy to cache/reumbra/{plugin_name}/{version}/
+    let cache_dir = cowork_dir
+        .join("cache")
+        .join(MARKETPLACE_NAME)
+        .join(plugin_name)
+        .join(version);
+    if cache_dir.exists() {
+        fs::remove_dir_all(&cache_dir)?;
+    }
+    copy_dir_recursive(source_dir, &cache_dir)?;
+
+    // 4. Register in known_marketplaces.json (relative paths with mnt/ prefix)
+    let km_path = cowork_dir.join("known_marketplaces.json");
+    let mut km: serde_json::Value = if km_path.exists() {
+        let content = fs::read_to_string(&km_path)?;
+        serde_json::from_str(&content)?
+    } else {
+        serde_json::json!({})
+    };
+
+    let mkt_rel_path = format!("mnt/.claude/cowork_plugins/marketplaces/{}", MARKETPLACE_NAME);
+    km[MARKETPLACE_NAME] = serde_json::json!({
+        "source": { "source": "directory", "path": mkt_rel_path },
+        "installLocation": mkt_rel_path,
+        "lastUpdated": Utc::now().to_rfc3339()
+    });
+    fs::write(&km_path, serde_json::to_string_pretty(&km)?)?;
+
+    // 5. Add to installed_plugins.json
+    let ip_path = cowork_dir.join("installed_plugins.json");
+    let mut ip: serde_json::Value = if ip_path.exists() {
+        let content = fs::read_to_string(&ip_path)?;
+        serde_json::from_str(&content)?
+    } else {
+        serde_json::json!({ "version": 2, "plugins": {} })
+    };
+
+    let plugin_key = format!("{}@{}", plugin_name, MARKETPLACE_NAME);
+    let cache_rel_path = format!(
+        "mnt/.claude/cowork_plugins/cache/{}/{}/{}",
+        MARKETPLACE_NAME, plugin_name, version
+    );
+    ip["plugins"][&plugin_key] = serde_json::json!([{
+        "scope": "user",
+        "installPath": cache_rel_path,
+        "version": version,
+        "installedAt": Utc::now().to_rfc3339(),
+        "lastUpdated": Utc::now().to_rfc3339()
+    }]);
+    fs::write(&ip_path, serde_json::to_string_pretty(&ip)?)?;
+
+    log::info!("Integrated {} into Cowork", plugin_name);
+    Ok(())
+}
+
+pub fn uninstall_plugin(plugin_name: &str, target: InstallTarget) -> Result<(), AppError> {
+    let plugin_key = format!("{}@{}", plugin_name, MARKETPLACE_NAME);
+
+    match target {
+        InstallTarget::ClaudeCode => {
+            // Remove from our marketplace
+            let mkt_dir = marketplace_dir()?;
+            let plugin_dir = mkt_dir.join("plugins").join(plugin_name);
+            if plugin_dir.exists() {
+                fs::remove_dir_all(&plugin_dir)?;
+            }
+
+            // Remove from marketplace.json
+            let manifest_path = mkt_dir.join(".claude-plugin").join("marketplace.json");
+            if manifest_path.exists() {
+                let content = fs::read_to_string(&manifest_path)?;
+                let mut manifest: MarketplaceManifest = serde_json::from_str(&content)?;
+                manifest.plugins.retain(|p| p.name != plugin_name);
+                fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+            }
+
+            // Disable in Claude Code settings.json
+            if let Some(home) = dirs::home_dir() {
+                let settings_path = home.join(".claude").join("settings.json");
+                if settings_path.exists() {
+                    let content = fs::read_to_string(&settings_path)?;
+                    let mut settings: serde_json::Value = serde_json::from_str(&content)?;
+                    if let Some(ep) = settings.get_mut("enabledPlugins") {
+                        if let Some(obj) = ep.as_object_mut() {
+                            obj.remove(&plugin_key);
+                        }
+                    }
+                    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
                 }
             }
-            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+        InstallTarget::ClaudeCowork => {
+            if let Some(cowork_dir) = find_cowork_plugins_dir() {
+                // Remove from marketplaces/reumbra/{plugin}
+                let mkt_plugin_dir = cowork_dir.join("marketplaces").join(MARKETPLACE_NAME).join(plugin_name);
+                if mkt_plugin_dir.exists() {
+                    fs::remove_dir_all(&mkt_plugin_dir)?;
+                }
+
+                // Remove from cache/reumbra/{plugin}
+                let cache_plugin_dir = cowork_dir.join("cache").join(MARKETPLACE_NAME).join(plugin_name);
+                if cache_plugin_dir.exists() {
+                    fs::remove_dir_all(&cache_plugin_dir)?;
+                }
+
+                // Remove from installed_plugins.json
+                let ip_path = cowork_dir.join("installed_plugins.json");
+                if ip_path.exists() {
+                    let content = fs::read_to_string(&ip_path)?;
+                    let mut ip: serde_json::Value = serde_json::from_str(&content)?;
+                    if let Some(plugins) = ip.get_mut("plugins") {
+                        if let Some(obj) = plugins.as_object_mut() {
+                            obj.remove(&plugin_key);
+                        }
+                    }
+                    fs::write(&ip_path, serde_json::to_string_pretty(&ip)?)?;
+                }
+
+                // Update marketplace.json
+                let mkt_manifest = cowork_dir
+                    .join("marketplaces")
+                    .join(MARKETPLACE_NAME)
+                    .join(".claude-plugin")
+                    .join("marketplace.json");
+                if mkt_manifest.exists() {
+                    let content = fs::read_to_string(&mkt_manifest)?;
+                    let mut manifest: MarketplaceManifest = serde_json::from_str(&content)?;
+                    manifest.plugins.retain(|p| p.name != plugin_name);
+                    fs::write(&mkt_manifest, serde_json::to_string_pretty(&manifest)?)?;
+                }
+            }
         }
     }
 
-    // Remove from config
+    // Always remove from our own config
     let mut config = load_config()?;
     config.installed_plugins.remove(plugin_name);
     save_config(&config)?;
@@ -434,7 +647,7 @@ pub fn uninstall_plugin(plugin_name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// List installed plugins from marketplace directory
+/// List installed plugins from marketplace directory, with per-target status
 pub fn list_installed() -> Result<Vec<InstalledPlugin>, AppError> {
     let config = load_config()?;
     let mkt_dir = marketplace_dir()?;
@@ -443,6 +656,41 @@ pub fn list_installed() -> Result<Vec<InstalledPlugin>, AppError> {
     if !plugins_dir.exists() {
         return Ok(Vec::new());
     }
+
+    // Check which plugins exist in Cowork
+    let cowork_plugins = find_cowork_plugins_dir();
+    let cowork_installed: std::collections::HashSet<String> = cowork_plugins
+        .as_ref()
+        .and_then(|dir| {
+            let ip_path = dir.join("installed_plugins.json");
+            if !ip_path.exists() {
+                return None;
+            }
+            let content = fs::read_to_string(&ip_path).ok()?;
+            let ip: serde_json::Value = serde_json::from_str(&content).ok()?;
+            ip.get("plugins")?.as_object().map(|obj| {
+                obj.keys()
+                    .filter(|k| k.ends_with(&format!("@{}", MARKETPLACE_NAME)))
+                    .map(|k| k.split('@').next().unwrap_or("").to_string())
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+
+    // Check which plugins are enabled in Claude Code
+    let code_enabled: std::collections::HashSet<String> = dirs::home_dir()
+        .and_then(|h| {
+            let settings_path = h.join(".claude").join("settings.json");
+            let content = fs::read_to_string(&settings_path).ok()?;
+            let settings: serde_json::Value = serde_json::from_str(&content).ok()?;
+            settings.get("enabledPlugins")?.as_object().map(|obj| {
+                obj.keys()
+                    .filter(|k| k.ends_with(&format!("@{}", MARKETPLACE_NAME)) && obj[*k] == true)
+                    .map(|k| k.split('@').next().unwrap_or("").to_string())
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
 
     let mut plugins = Vec::new();
 
@@ -471,6 +719,14 @@ pub fn list_installed() -> Result<Vec<InstalledPlugin>, AppError> {
             .map(|e| (e.version.clone(), e.installed_at.clone()))
             .unwrap_or_else(|| ("unknown".to_string(), String::new()));
 
+        let mut targets = Vec::new();
+        if code_enabled.contains(&name) {
+            targets.push("claude-code".to_string());
+        }
+        if cowork_installed.contains(&name) {
+            targets.push("claude-cowork".to_string());
+        }
+
         plugins.push(InstalledPlugin {
             install_path: entry.path().display().to_string(),
             name,
@@ -478,6 +734,7 @@ pub fn list_installed() -> Result<Vec<InstalledPlugin>, AppError> {
             description,
             marketplace: MARKETPLACE_NAME.to_string(),
             installed_at,
+            targets,
         });
     }
 
