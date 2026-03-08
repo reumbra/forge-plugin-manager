@@ -53,6 +53,7 @@ pub fn config_dir() -> Result<PathBuf, AppError> {
 /// Windows: %LOCALAPPDATA%/forge-devkit/cache
 /// macOS:   ~/Library/Caches/forge-devkit
 /// Linux:   ~/.cache/forge-devkit
+#[allow(dead_code)]
 pub fn cache_dir() -> Result<PathBuf, AppError> {
     dirs::cache_dir()
         .map(|d| d.join(APP_DIR_NAME))
@@ -169,11 +170,11 @@ pub fn detect_targets() -> TargetInfo {
 
     // Claude Code: ~/.claude/
     let claude_code_path = home.as_ref().map(|h| h.join(".claude"));
-    let claude_code = claude_code_path.as_ref().map_or(false, |p| p.exists());
+    let claude_code = claude_code_path.as_ref().is_some_and(|p| p.exists());
 
     // Claude Cowork: {config_dir}/Claude/local-agent-mode-sessions/
     let cowork_path = config.as_ref().map(|c| c.join("Claude").join("local-agent-mode-sessions"));
-    let claude_cowork = cowork_path.as_ref().map_or(false, |p| p.exists());
+    let claude_cowork = cowork_path.as_ref().is_some_and(|p| p.exists());
 
     TargetInfo {
         claude_code,
