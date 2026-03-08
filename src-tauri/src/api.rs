@@ -39,6 +39,7 @@ pub struct PluginInfo {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct DownloadResponse {
     pub url: String,
     pub plugin_name: String,
