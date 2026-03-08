@@ -814,3 +814,406 @@ fn extract_zip(data: &[u8], dest: &Path) -> Result<(), AppError> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // --- InstallTarget serde ---
+
+    #[test]
+    fn install_target_serializes_to_kebab_case() {
+        let code = serde_json::to_string(&InstallTarget::ClaudeCode).unwrap();
+        let cowork = serde_json::to_string(&InstallTarget::ClaudeCowork).unwrap();
+        assert_eq!(code, "\"claude-code\"");
+        assert_eq!(cowork, "\"claude-cowork\"");
+    }
+
+    #[test]
+    fn install_target_deserializes_from_kebab_case() {
+        let code: InstallTarget = serde_json::from_str("\"claude-code\"").unwrap();
+        let cowork: InstallTarget = serde_json::from_str("\"claude-cowork\"").unwrap();
+        assert_eq!(code, InstallTarget::ClaudeCode);
+        assert_eq!(cowork, InstallTarget::ClaudeCowork);
+    }
+
+    #[test]
+    fn install_target_rejects_invalid_variant() {
+        let result = serde_json::from_str::<InstallTarget>("\"claude-desktop\"");
+        assert!(result.is_err());
+    }
+
+    // --- MarketplaceManifest serde ---
+
+    #[test]
+    fn marketplace_manifest_owner_as_object() {
+        let json = r#"{
+            "name": "reumbra",
+            "owner": {"name": "Reumbra", "email": "support@reumbra.dev"},
+            "plugins": []
+        }"#;
+        let manifest: MarketplaceManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.name, "reumbra");
+        assert_eq!(manifest.owner["name"], "Reumbra");
+        assert_eq!(manifest.owner["email"], "support@reumbra.dev");
+    }
+
+    #[test]
+    fn marketplace_manifest_owner_as_string() {
+        let json = r#"{
+            "name": "reumbra",
+            "owner": "Reumbra",
+            "plugins": []
+        }"#;
+        let manifest: MarketplaceManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.owner, "Reumbra");
+    }
+
+    #[test]
+    fn marketplace_manifest_roundtrip_with_plugins() {
+        let manifest = MarketplaceManifest {
+            name: "reumbra".to_string(),
+            owner: serde_json::json!({"name": "Reumbra", "email": "support@reumbra.dev"}),
+            plugins: vec![
+                MarketplacePlugin {
+                    name: "forge-core".to_string(),
+                    source: "./plugins/forge-core".to_string(),
+                    description: Some("Core plugin".to_string()),
+                    version: Some("6.0.0".to_string()),
+                },
+            ],
+        };
+
+        let serialized = serde_json::to_string_pretty(&manifest).unwrap();
+        let deserialized: MarketplaceManifest = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.name, "reumbra");
+        assert_eq!(deserialized.plugins.len(), 1);
+        assert_eq!(deserialized.plugins[0].name, "forge-core");
+        assert_eq!(deserialized.plugins[0].version, Some("6.0.0".to_string()));
+    }
+
+    #[test]
+    fn marketplace_manifest_default_empty_plugins() {
+        let json = r#"{"name": "test", "owner": "Test"}"#;
+        let manifest: MarketplaceManifest = serde_json::from_str(json).unwrap();
+        assert!(manifest.plugins.is_empty());
+    }
+
+    // --- ForgeConfig serde ---
+
+    #[test]
+    fn forge_config_default_is_empty() {
+        let config = ForgeConfig::default();
+        assert!(config.license_key.is_none());
+        assert!(config.machine_id.is_none());
+        assert!(config.plan.is_none());
+        assert!(config.installed_plugins.is_empty());
+    }
+
+    #[test]
+    fn forge_config_roundtrip() {
+        let mut config = ForgeConfig::default();
+        config.license_key = Some("FRG-ABCD-EFGH-IJKL".to_string());
+        config.plan = Some("pro".to_string());
+        config.installed_plugins.insert(
+            "forge-core".to_string(),
+            InstalledPluginEntry {
+                version: "6.0.0".to_string(),
+                installed_at: "2026-03-08T00:00:00Z".to_string(),
+            },
+        );
+
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: ForgeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.license_key.unwrap(), "FRG-ABCD-EFGH-IJKL");
+        assert_eq!(restored.plan.unwrap(), "pro");
+        assert!(restored.installed_plugins.contains_key("forge-core"));
+        assert_eq!(restored.installed_plugins["forge-core"].version, "6.0.0");
+    }
+
+    #[test]
+    fn forge_config_skips_none_fields() {
+        let config = ForgeConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("license_key"));
+        assert!(!json.contains("machine_id"));
+    }
+
+    // --- Plugin key format ---
+
+    #[test]
+    fn plugin_key_format_matches_convention() {
+        let name = "forge-core";
+        let key = format!("{}@{}", name, MARKETPLACE_NAME);
+        assert_eq!(key, "forge-core@reumbra");
+    }
+
+    // --- is_plugin_in_code with temp filesystem ---
+
+    #[test]
+    fn is_plugin_in_code_logic_with_settings_json() {
+        // This test verifies the JSON parsing logic used by is_plugin_in_code.
+        // We can't override dirs::home_dir(), so we test the JSON logic directly.
+        let settings = serde_json::json!({
+            "enabledPlugins": {
+                "forge-core@reumbra": true,
+                "forge-qa@reumbra": false
+            }
+        });
+
+        let plugin_key = format!("{}@{}", "forge-core", MARKETPLACE_NAME);
+        let is_enabled = settings
+            .get("enabledPlugins")
+            .and_then(|ep| ep.get(&plugin_key))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        assert!(is_enabled, "forge-core should be enabled");
+
+        let plugin_key_qa = format!("{}@{}", "forge-qa", MARKETPLACE_NAME);
+        let is_qa_enabled = settings
+            .get("enabledPlugins")
+            .and_then(|ep| ep.get(&plugin_key_qa))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        assert!(!is_qa_enabled, "forge-qa should be disabled (false)");
+
+        let plugin_key_missing = format!("{}@{}", "nonexistent", MARKETPLACE_NAME);
+        let is_missing = settings
+            .get("enabledPlugins")
+            .and_then(|ep| ep.get(&plugin_key_missing))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        assert!(!is_missing, "nonexistent plugin should not be found");
+    }
+
+    // --- is_plugin_in_cowork logic ---
+
+    #[test]
+    fn is_plugin_in_cowork_logic_with_installed_plugins_json() {
+        let ip = serde_json::json!({
+            "version": 2,
+            "plugins": {
+                "forge-core@reumbra": [{
+                    "scope": "user",
+                    "installPath": "mnt/.claude/cowork_plugins/cache/reumbra/forge-core/6.0.0",
+                    "version": "6.0.0"
+                }]
+            }
+        });
+
+        let plugin_key = format!("{}@{}", "forge-core", MARKETPLACE_NAME);
+        let found = ip.get("plugins")
+            .and_then(|p| p.get(&plugin_key))
+            .is_some();
+        assert!(found, "forge-core should be in cowork");
+
+        let missing_key = format!("{}@{}", "nonexistent", MARKETPLACE_NAME);
+        let not_found = ip.get("plugins")
+            .and_then(|p| p.get(&missing_key))
+            .is_some();
+        assert!(!not_found, "nonexistent should not be in cowork");
+    }
+
+    // --- Cowork installed_plugins.json structure ---
+
+    #[test]
+    fn cowork_installed_plugins_structure() {
+        // Verifies the exact structure we write to installed_plugins.json
+        let plugin_name = "forge-core";
+        let version = "6.2.0";
+        let mut ip = serde_json::json!({ "version": 2, "plugins": {} });
+
+        let plugin_key = format!("{}@{}", plugin_name, MARKETPLACE_NAME);
+        let cache_rel_path = format!(
+            "mnt/.claude/cowork_plugins/cache/{}/{}/{}",
+            MARKETPLACE_NAME, plugin_name, version
+        );
+        ip["plugins"][&plugin_key] = serde_json::json!([{
+            "scope": "user",
+            "installPath": cache_rel_path,
+            "version": version,
+            "installedAt": "2026-03-08T00:00:00Z",
+            "lastUpdated": "2026-03-08T00:00:00Z"
+        }]);
+
+        // Verify structure
+        let plugins = ip["plugins"].as_object().unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert!(plugins.contains_key("forge-core@reumbra"));
+
+        let entries = plugins["forge-core@reumbra"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["scope"], "user");
+        assert_eq!(
+            entries[0]["installPath"],
+            "mnt/.claude/cowork_plugins/cache/reumbra/forge-core/6.2.0"
+        );
+    }
+
+    // --- known_marketplaces.json structure ---
+
+    #[test]
+    fn known_marketplaces_code_structure() {
+        let mkt_path = "/home/user/.config/forge-devkit/marketplace";
+        let mut km = serde_json::json!({});
+        km[MARKETPLACE_NAME] = serde_json::json!({
+            "source": { "source": "directory", "path": mkt_path },
+            "installLocation": mkt_path,
+            "lastUpdated": "2026-03-08T00:00:00Z"
+        });
+
+        assert_eq!(km["reumbra"]["source"]["source"], "directory");
+        assert_eq!(km["reumbra"]["source"]["path"], mkt_path);
+        assert_eq!(km["reumbra"]["installLocation"], mkt_path);
+    }
+
+    #[test]
+    fn known_marketplaces_cowork_uses_relative_paths() {
+        let mkt_rel_path = format!("mnt/.claude/cowork_plugins/marketplaces/{}", MARKETPLACE_NAME);
+        let mut km = serde_json::json!({});
+        km[MARKETPLACE_NAME] = serde_json::json!({
+            "source": { "source": "directory", "path": &mkt_rel_path },
+            "installLocation": &mkt_rel_path,
+            "lastUpdated": "2026-03-08T00:00:00Z"
+        });
+
+        let path = km["reumbra"]["source"]["path"].as_str().unwrap();
+        assert!(path.starts_with("mnt/"), "Cowork paths must start with mnt/");
+        assert!(!path.starts_with("/"), "Cowork paths must be relative");
+    }
+
+    // --- Filesystem-based tests with tempdir ---
+
+    #[test]
+    fn copy_dir_recursive_works() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        fs::create_dir_all(src.join("subdir")).unwrap();
+        fs::write(src.join("file.txt"), "hello").unwrap();
+        fs::write(src.join("subdir").join("nested.txt"), "world").unwrap();
+
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        assert!(dst.join("file.txt").exists());
+        assert!(dst.join("subdir").join("nested.txt").exists());
+        assert_eq!(fs::read_to_string(dst.join("file.txt")).unwrap(), "hello");
+        assert_eq!(
+            fs::read_to_string(dst.join("subdir").join("nested.txt")).unwrap(),
+            "world"
+        );
+    }
+
+    #[test]
+    fn marketplace_manifest_file_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let manifest_path = tmp.path().join("marketplace.json");
+
+        let manifest = MarketplaceManifest {
+            name: MARKETPLACE_NAME.to_string(),
+            owner: serde_json::json!({"name": "Reumbra", "email": "support@reumbra.dev"}),
+            plugins: vec![
+                MarketplacePlugin {
+                    name: "forge-core".to_string(),
+                    source: "./plugins/forge-core".to_string(),
+                    description: Some("Core plugin".to_string()),
+                    version: Some("6.0.0".to_string()),
+                },
+                MarketplacePlugin {
+                    name: "forge-qa".to_string(),
+                    source: "./plugins/forge-qa".to_string(),
+                    description: None,
+                    version: None,
+                },
+            ],
+        };
+
+        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+
+        let content = fs::read_to_string(&manifest_path).unwrap();
+        let restored: MarketplaceManifest = serde_json::from_str(&content).unwrap();
+
+        assert_eq!(restored.plugins.len(), 2);
+        assert_eq!(restored.plugins[0].name, "forge-core");
+        assert!(restored.plugins[1].description.is_none());
+    }
+
+    #[test]
+    fn uninstall_removes_plugin_from_manifest() {
+        // Simulate the manifest update logic from uninstall_plugin
+        let mut manifest = MarketplaceManifest {
+            name: MARKETPLACE_NAME.to_string(),
+            owner: serde_json::json!("Reumbra"),
+            plugins: vec![
+                MarketplacePlugin {
+                    name: "forge-core".to_string(),
+                    source: "./plugins/forge-core".to_string(),
+                    description: None,
+                    version: Some("6.0.0".to_string()),
+                },
+                MarketplacePlugin {
+                    name: "forge-qa".to_string(),
+                    source: "./plugins/forge-qa".to_string(),
+                    description: None,
+                    version: Some("3.0.0".to_string()),
+                },
+            ],
+        };
+
+        manifest.plugins.retain(|p| p.name != "forge-core");
+        assert_eq!(manifest.plugins.len(), 1);
+        assert_eq!(manifest.plugins[0].name, "forge-qa");
+    }
+
+    // --- PluginManifest (plugin.json) ---
+
+    #[test]
+    fn plugin_manifest_parses() {
+        let json = r#"{
+            "name": "forge-core",
+            "version": "6.2.0",
+            "description": "Core development pipeline for Claude Code"
+        }"#;
+        let manifest: PluginManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.description, "Core development pipeline for Claude Code");
+    }
+
+    // --- InstalledPlugin targets ---
+
+    #[test]
+    fn installed_plugin_both_targets() {
+        let plugin = InstalledPlugin {
+            name: "forge-core".to_string(),
+            version: "6.0.0".to_string(),
+            description: "test".to_string(),
+            marketplace: MARKETPLACE_NAME.to_string(),
+            installed_at: "2026-03-08T00:00:00Z".to_string(),
+            install_path: "/tmp/test".to_string(),
+            targets: vec!["claude-code".to_string(), "claude-cowork".to_string()],
+        };
+
+        assert!(plugin.targets.contains(&"claude-code".to_string()));
+        assert!(plugin.targets.contains(&"claude-cowork".to_string()));
+        assert_eq!(plugin.targets.len(), 2);
+    }
+
+    #[test]
+    fn installed_plugin_single_target() {
+        let plugin = InstalledPlugin {
+            name: "forge-core".to_string(),
+            version: "6.0.0".to_string(),
+            description: "test".to_string(),
+            marketplace: MARKETPLACE_NAME.to_string(),
+            installed_at: String::new(),
+            install_path: String::new(),
+            targets: vec!["claude-cowork".to_string()],
+        };
+
+        assert!(!plugin.targets.contains(&"claude-code".to_string()));
+        assert!(plugin.targets.contains(&"claude-cowork".to_string()));
+    }
+}
