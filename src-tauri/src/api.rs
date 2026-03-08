@@ -44,6 +44,7 @@ pub struct PluginInfo {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub struct DownloadRequest {
     pub license_key: String,
     pub machine_id: String,
@@ -58,6 +59,7 @@ pub struct DownloadResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(dead_code)]
 pub struct VersionInfo {
     pub version: String,
     pub released_at: String,
@@ -183,6 +185,7 @@ impl ApiClient {
         self.parse_response(resp).await
     }
 
+    #[allow(dead_code)]
     pub async fn get_versions(
         &self,
         plugin_name: &str,
@@ -227,6 +230,6 @@ impl ApiClient {
             return Err(AppError::Api(err_msg));
         }
 
-        serde_json::from_str(&text).map_err(|e| AppError::Json(e))
+        serde_json::from_str(&text).map_err(AppError::Json)
     }
 }

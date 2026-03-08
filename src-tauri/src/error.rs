@@ -24,6 +24,7 @@ pub enum AppError {
     License(String),
 
     #[error("Plugin error: {0}")]
+    #[allow(dead_code)]
     Plugin(String),
 }
 
