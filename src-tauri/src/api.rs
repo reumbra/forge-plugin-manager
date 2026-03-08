@@ -11,13 +11,7 @@ pub struct ApiClient {
     base_url: String,
 }
 
-// --- Request/Response types ---
-
-#[derive(Debug, Serialize)]
-pub struct ActivateRequest {
-    pub license_key: String,
-    pub machine_id: String,
-}
+// --- Public types (used by commands.rs) ---
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LicenseInfo {
@@ -39,17 +33,9 @@ pub struct MachineInfo {
 pub struct PluginInfo {
     pub name: String,
     pub description: Option<String>,
+    #[serde(alias = "current_version")]
     pub latest_version: String,
     pub category: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[allow(dead_code)]
-pub struct DownloadRequest {
-    pub license_key: String,
-    pub machine_id: String,
-    pub plugin_name: String,
-    pub version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,20 +44,63 @@ pub struct DownloadResponse {
     pub version: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[allow(dead_code)]
-pub struct VersionInfo {
-    pub version: String,
-    pub released_at: String,
-    pub changelog: Option<String>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct FeedbackRequest {
     pub license_key: Option<String>,
     pub feedback_type: String,
     pub message: String,
     pub metadata: Option<serde_json::Value>,
+}
+
+// --- Internal API response types ---
+
+#[derive(Debug, Serialize)]
+struct ActivateRequest {
+    license_key: String,
+    machine_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActivateResponse {
+    #[allow(dead_code)]
+    success: bool,
+    license: ActivateLicense,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActivateLicense {
+    plan: String,
+    expires_at: String,
+    machines_used: i32,
+    max_machines: i32,
+}
+
+#[derive(Debug, Deserialize)]
+struct StatusResponse {
+    #[allow(dead_code)]
+    valid: bool,
+    license: StatusLicense,
+}
+
+#[derive(Debug, Deserialize)]
+struct StatusLicense {
+    plan: String,
+    expires_at: String,
+    is_active: bool,
+    machines: Vec<StatusMachine>,
+    #[allow(dead_code)]
+    allowed_plugins: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StatusMachine {
+    machine_id: String,
+    activated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginListResponse {
+    plugins: Vec<PluginInfo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,7 +133,19 @@ impl ApiClient {
             .send()
             .await?;
 
-        self.parse_response(resp).await
+        let data: ActivateResponse = self.parse_response(resp).await?;
+
+        Ok(LicenseInfo {
+            license_key: license_key.to_string(),
+            plan: data.license.plan,
+            is_active: true,
+            expires_at: data.license.expires_at,
+            machines: vec![MachineInfo {
+                machine_id: machine_id.to_string(),
+                activated_at: chrono::Utc::now().to_rfc3339(),
+            }],
+            max_machines: data.license.max_machines,
+        })
     }
 
     pub async fn deactivate(
@@ -137,7 +178,24 @@ impl ApiClient {
             .send()
             .await?;
 
-        self.parse_response(resp).await
+        let data: StatusResponse = self.parse_response(resp).await?;
+
+        Ok(LicenseInfo {
+            license_key: license_key.to_string(),
+            plan: data.license.plan,
+            is_active: data.license.is_active,
+            expires_at: data.license.expires_at,
+            machines: data
+                .license
+                .machines
+                .into_iter()
+                .map(|m| MachineInfo {
+                    machine_id: m.machine_id,
+                    activated_at: m.activated_at.unwrap_or_default(),
+                })
+                .collect(),
+            max_machines: 3,
+        })
     }
 
     pub async fn list_plugins(
@@ -148,14 +206,13 @@ impl ApiClient {
         let resp = self
             .client
             .get(format!("{}/plugins/list", self.base_url))
-            .query(&[("license_key", license_key), ("machine_id", machine_id)])
+            .header("x-license-key", license_key)
+            .header("x-machine-id", machine_id)
             .send()
             .await?;
 
-        let body: serde_json::Value = self.parse_response(resp).await?;
-        let plugins: Vec<PluginInfo> =
-            serde_json::from_value(body["plugins"].clone()).unwrap_or_default();
-        Ok(plugins)
+        let body: PluginListResponse = self.parse_response(resp).await?;
+        Ok(body.plugins)
     }
 
     pub async fn download_plugin(
@@ -166,8 +223,6 @@ impl ApiClient {
         version: Option<&str>,
     ) -> Result<DownloadResponse, AppError> {
         let mut req = serde_json::json!({
-            "license_key": license_key,
-            "machine_id": machine_id,
             "plugin_name": plugin_name,
         });
 
@@ -178,6 +233,8 @@ impl ApiClient {
         let resp = self
             .client
             .post(format!("{}/plugins/download", self.base_url))
+            .header("x-license-key", license_key)
+            .header("x-machine-id", machine_id)
             .json(&req)
             .send()
             .await?;
@@ -185,27 +242,10 @@ impl ApiClient {
         self.parse_response(resp).await
     }
 
-    #[allow(dead_code)]
-    pub async fn get_versions(
+    pub async fn send_feedback(
         &self,
-        plugin_name: &str,
-        license_key: &str,
-        machine_id: &str,
-    ) -> Result<Vec<VersionInfo>, AppError> {
-        let resp = self
-            .client
-            .get(format!("{}/plugins/versions/{}", self.base_url, plugin_name))
-            .query(&[("license_key", license_key), ("machine_id", machine_id)])
-            .send()
-            .await?;
-
-        let body: serde_json::Value = self.parse_response(resp).await?;
-        let versions: Vec<VersionInfo> =
-            serde_json::from_value(body["versions"].clone()).unwrap_or_default();
-        Ok(versions)
-    }
-
-    pub async fn send_feedback(&self, feedback: FeedbackRequest) -> Result<serde_json::Value, AppError> {
+        feedback: FeedbackRequest,
+    ) -> Result<serde_json::Value, AppError> {
         let resp = self
             .client
             .post(format!("{}/feedback", self.base_url))

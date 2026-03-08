@@ -109,20 +109,7 @@ async function authedGet<T>(path: string, params?: Record<string, string>): Prom
   return data as T;
 }
 
-async function authedPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-license-key': webLicenseKey!,
-      'x-machine-id': webMachineId,
-    },
-    body: JSON.stringify(body),
-  });
-  const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || `API error ${resp.status}`);
-  return data as T;
-}
+
 
 // API functions — dual mode (Tauri invoke / Web fetch)
 
@@ -192,8 +179,13 @@ export async function getPluginCatalog(): Promise<PluginInfo[]> {
     return invoke('get_plugin_catalog');
   }
   if (!webLicenseKey) throw new Error('No license activated');
-  const data = await authedGet<{ plugins: PluginInfo[] }>('/plugins/list');
-  return data.plugins;
+  const data = await authedGet<{ plugins: { name: string; current_version: string; description: string | null; category?: string | null }[] }>('/plugins/list');
+  return data.plugins.map(p => ({
+    name: p.name,
+    description: p.description,
+    latest_version: p.current_version,
+    category: p.category ?? null,
+  }));
 }
 
 export async function installPlugin(pluginName: string, version?: string): Promise<InstalledPlugin> {
