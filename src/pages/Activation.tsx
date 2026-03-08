@@ -76,8 +76,8 @@ export default function ActivationPage({ onActivated }: Props) {
 
         <p className="text-center text-[11px] text-gray-600 mt-6">
           Purchase a license at{' '}
-          <a href="https://reumbra.dev/forge" className="text-forge-400 hover:underline">
-            reumbra.dev/forge
+          <a href="https://forge.reumbra.com/pricing" className="text-forge-400 hover:underline">
+            forge.reumbra.com/pricing
           </a>
         </p>
       </div>
