@@ -6,6 +6,12 @@
 
 **Status:** v0.1.0 — Initial scaffold, all screens and backend commands implemented.
 
+## Ecosystem Contract
+
+**Single source of truth** for cross-repo contracts (API, file paths, machine ID, install flow): `forge-devkit-api/docs/forge-ecosystem-contract.md`
+
+When changing paths, API contracts, or install mechanics — update the contract document first, then implement in each repo.
+
 ## Tech Stack
 
 - **Framework:** Tauri 2 (Rust backend + WebView frontend)
