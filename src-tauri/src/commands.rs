@@ -155,7 +155,7 @@ pub async fn install_plugin(
         .await?;
 
     // Download the zip file
-    let zip_data = reqwest::get(&download.download_url)
+    let zip_data = reqwest::get(&download.url)
         .await
         .map_err(AppError::Network)?
         .bytes()

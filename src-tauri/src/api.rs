@@ -40,8 +40,10 @@ pub struct PluginInfo {
 
 #[derive(Debug, Deserialize)]
 pub struct DownloadResponse {
-    pub download_url: String,
+    pub url: String,
+    pub plugin_name: String,
     pub version: String,
+    pub expires_in: u64,
 }
 
 #[derive(Debug, Serialize)]
