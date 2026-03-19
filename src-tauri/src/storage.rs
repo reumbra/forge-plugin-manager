@@ -328,6 +328,7 @@ struct RemotePlugin {
     #[allow(dead_code)]
     name: String,
     marketplace_name: Option<String>,
+    installed_by: Option<String>,
 }
 
 fn read_remote_manifest(account_path: &Path) -> Option<RemoteManifest> {
@@ -339,16 +340,25 @@ fn read_remote_manifest(account_path: &Path) -> Option<RemoteManifest> {
 fn extract_org_label(manifest: Option<&RemoteManifest>) -> String {
     manifest
         .and_then(|m| {
-            // Find first plugin with a marketplace_name that isn't a generic name
-            m.plugins.iter().find_map(|p| {
-                p.marketplace_name.as_ref().and_then(|name| {
-                    // Skip generic marketplace names
-                    if name == "knowledge-work-plugins" {
-                        None
-                    } else {
-                        Some(name.clone())
+            // Count marketplace names among auto-installed plugins (org-pushed)
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            for p in &m.plugins {
+                if p.installed_by.as_deref() == Some("auto") {
+                    if let Some(name) = &p.marketplace_name {
+                        if name != "knowledge-work-plugins" {
+                            *counts.entry(name.clone()).or_insert(0) += 1;
+                        }
                     }
-                })
+                }
+            }
+            // Return the most frequent marketplace name
+            counts.into_iter().max_by_key(|(_, c)| *c).map(|(name, _)| {
+                // Clean up: "Owner/repo-name" → take before "/" if it looks like a repo path
+                if let Some(slash_pos) = name.find('/') {
+                    name[..slash_pos].to_string()
+                } else {
+                    name
+                }
             })
         })
         .unwrap_or_else(|| "Organization".to_string())
