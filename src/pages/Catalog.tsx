@@ -8,7 +8,6 @@ import {
   type InstalledPlugin,
   type LicenseInfo,
   type AppInfo,
-  type InstallTarget,
 } from '../lib/api';
 
 interface Props {
@@ -59,7 +58,8 @@ export default function CatalogPage({ license }: Props) {
   const [installing, setInstalling] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [target, setTarget] = useState<InstallTarget>('claude-cowork');
+  const [targetType, setTargetType] = useState<'cowork' | 'code'>('cowork');
+  const [selectedSpaceId, setSelectedSpaceId] = useState<string>('');
 
   useEffect(() => {
     loadData();
@@ -77,10 +77,16 @@ export default function CatalogPage({ license }: Props) {
       setInstalled(inst);
       setAppInfo(info);
 
-      // Auto-select available target (prefer Cowork)
+      // Auto-select: prefer org cowork space, fallback to first space, then code
       if (info) {
-        if (info.targets.claude_cowork && !info.targets.claude_code) setTarget('claude-cowork');
-        else if (!info.targets.claude_cowork && info.targets.claude_code) setTarget('claude-code');
+        const spaces = info.targets.cowork_spaces;
+        if (spaces.length > 0) {
+          setTargetType('cowork');
+          const orgSpace = spaces.find(s => s.is_org);
+          setSelectedSpaceId(orgSpace?.id ?? spaces[0].id);
+        } else if (info.targets.claude_code) {
+          setTargetType('code');
+        }
       }
     } catch (err) {
       setError(String(err));
@@ -89,16 +95,25 @@ export default function CatalogPage({ license }: Props) {
     }
   };
 
+  const spaces = appInfo?.targets.cowork_spaces ?? [];
+  const hasCowork = spaces.length > 0;
+  const hasCode = appInfo?.targets.claude_code ?? false;
+  const hasTargets = hasCowork || hasCode;
+  const hasBothTargets = hasCowork && hasCode;
+  const effectiveTarget = targetType === 'code' ? 'claude-code' : selectedSpaceId;
+
   const handleInstall = async (pluginName: string) => {
     setInstalling(pluginName);
     setError('');
     setSuccessMsg('');
     try {
-      await installPlugin(pluginName, target);
+      await installPlugin(pluginName, effectiveTarget);
       const inst = await getInstalledPlugins().catch(() => []);
       setInstalled(inst);
 
-      const targetLabel = target === 'claude-cowork' ? 'Claude Cowork' : 'Claude Code';
+      const targetLabel = targetType === 'code'
+        ? 'Claude Code'
+        : `Cowork · ${spaces.find(s => s.id === selectedSpaceId)?.label ?? 'Cowork'}`;
       setSuccessMsg(`${pluginName} installed to ${targetLabel}. Restart your session to load it.`);
     } catch (err) {
       setError(String(err));
@@ -109,12 +124,11 @@ export default function CatalogPage({ license }: Props) {
 
   const isInstalledForTarget = (name: string) => {
     const plugin = installed.find((p) => p.name === name);
-    return plugin?.targets?.includes(target) ?? false;
+    if (!plugin?.targets) return false;
+    if (targetType === 'code') return plugin.targets.includes('claude-code');
+    return plugin.targets.some(t => t.startsWith(`cowork:${selectedSpaceId}:`));
   };
   const getInstalledVersion = (name: string) => installed.find((p) => p.name === name)?.version;
-
-  const hasTargets = appInfo && (appInfo.targets.claude_code || appInfo.targets.claude_cowork);
-  const hasBothTargets = appInfo?.targets.claude_code && appInfo?.targets.claude_cowork;
 
   // Group plugins by category dynamically
   const groupedPlugins = () => {
@@ -181,17 +195,17 @@ export default function CatalogPage({ license }: Props) {
           {hasBothTargets ? (
             <div className="flex rounded-lg border border-gray-700 overflow-hidden">
               <button
-                onClick={() => setTarget('claude-cowork')}
+                onClick={() => setTargetType('cowork')}
                 className={`px-3 py-1.5 text-xs transition-colors ${
-                  target === 'claude-cowork' ? 'bg-forge-600/20 text-forge-300' : 'text-gray-400 hover:text-gray-200'
+                  targetType === 'cowork' ? 'bg-forge-600/20 text-forge-300' : 'text-gray-400 hover:text-gray-200'
                 }`}
               >
                 Claude Cowork
               </button>
               <button
-                onClick={() => setTarget('claude-code')}
+                onClick={() => setTargetType('code')}
                 className={`px-3 py-1.5 text-xs border-l border-gray-700 transition-colors ${
-                  target === 'claude-code' ? 'bg-forge-600/20 text-forge-300' : 'text-gray-400 hover:text-gray-200'
+                  targetType === 'code' ? 'bg-forge-600/20 text-forge-300' : 'text-gray-400 hover:text-gray-200'
                 }`}
               >
                 Claude Code
@@ -199,8 +213,21 @@ export default function CatalogPage({ license }: Props) {
             </div>
           ) : (
             <span className="text-xs text-gray-300">
-              {appInfo?.targets.claude_cowork ? 'Claude Cowork' : 'Claude Code'}
+              {hasCowork ? 'Claude Cowork' : 'Claude Code'}
             </span>
+          )}
+          {targetType === 'cowork' && spaces.length > 1 && (
+            <select
+              value={selectedSpaceId}
+              onChange={(e) => setSelectedSpaceId(e.target.value)}
+              className="px-2 py-1.5 text-xs bg-gray-900 border border-gray-700 rounded-lg text-gray-300 focus:border-forge-500 focus:outline-none"
+            >
+              {spaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}{s.is_org ? ' (org)' : ''}
+                </option>
+              ))}
+            </select>
           )}
         </div>
       )}

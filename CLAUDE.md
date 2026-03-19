@@ -4,7 +4,7 @@
 
 **forge-plugin-manager** — Tauri 2 desktop app for managing Forge plugins in Claude Cowork. Handles license activation, plugin catalog browsing, install/update/remove, and feedback.
 
-**Status:** v0.1.0 — Initial scaffold, all screens and backend commands implemented.
+**Status:** v0.4.0 — Dynamic catalog, dual-target install (Claude Code + Cowork), macOS builds.
 
 ## Ecosystem Contract
 
@@ -34,10 +34,11 @@ src-tauri/              # Rust backend
 │   ├── lib.rs          # Tauri builder + command registration
 │   ├── main.rs         # Entry point
 │   ├── api.rs          # HTTP client for forge-devkit-api
-│   ├── cowork.rs       # Cowork directory detection + plugin management
+│   ├── storage.rs      # Plugin storage, target detection, install/uninstall logic
 │   ├── commands.rs     # Tauri commands (bridge frontend ↔ backend)
 │   ├── error.rs        # Error types
-│   └── machine.rs      # Machine ID generation (SHA256)
+│   ├── machine.rs      # Machine ID generation (SHA256)
+│   └── cowork.rs       # (legacy, superseded by storage.rs)
 ├── tauri.conf.json     # Tauri config (window, CSP, updater)
 └── Cargo.toml          # Rust dependencies
 ```
@@ -55,11 +56,31 @@ All API calls go to `https://api.reumbra.com/velvet` (forge-devkit-api):
 
 ## Cowork Integration
 
-Plugin installation mimics Cowork's native format:
-- Files go to `cowork_plugins/cache/reumbra-plugins/{name}/{version}/`
-- Registry updated in `cowork_plugins/installed_plugins.json`
-- Key format: `{plugin-name}@reumbra-plugins`
-- Auto-detect paths: Win `%APPDATA%/Claude`, Mac `~/Library/Application Support/Claude`
+### Personal accounts (implemented)
+
+Plugin installation into personal Cowork accounts via `cowork_plugins/`:
+- Marketplace dir: `cowork_plugins/marketplaces/reumbra/{plugin-name}/`
+- Cache dir: `cowork_plugins/cache/reumbra/{plugin-name}/{version}/`
+- Registry: `cowork_plugins/installed_plugins.json` (v2 format)
+- Known marketplaces: `cowork_plugins/known_marketplaces.json`
+- Key format: `{plugin-name}@reumbra`
+- Detection: scan `{config_dir}/Claude/local-agent-mode-sessions/{session}/{user}/cowork_plugins/`
+
+### Organization accounts (VERIFIED)
+
+Org accounts have two plugin systems running in parallel:
+- **`remote_cowork_plugins/`** — cloud-synced org plugins (read-only, managed by Anthropic)
+- **`cowork_plugins/`** — personal plugins (writable, same format as personal account)
+
+Org sessions do NOT create `cowork_plugins/` by default. Our approach: create it alongside `remote_cowork_plugins/` with the same 4-location format as personal accounts. Cowork internally uses Claude CLI with `--cowork` flag, which reads `cowork_plugins/` independently.
+
+**Detection:**
+- Personal account: has `cowork_plugins/` dir
+- Org account: has `remote_cowork_plugins/` with non-empty `manifest.json`, may or may not have `cowork_plugins/`
+
+**Path migration:** Claude Desktop v1.1.4498+ uses `claude-code-sessions/` instead of `local-agent-mode-sessions/` — code checks both.
+
+See ecosystem contract (section 9) for full path documentation and env vars.
 
 ## Development
 

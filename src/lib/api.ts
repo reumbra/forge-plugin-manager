@@ -21,7 +21,16 @@ export interface PluginInfo {
   category: string | null;
 }
 
-export type InstallTarget = 'claude-code' | 'claude-cowork';
+// InstallTarget: 'claude-code' for Code, or cowork space_id string
+export type InstallTarget = string;
+
+export interface CoworkSpace {
+  id: string;
+  label: string;
+  path: string;
+  is_org: boolean;
+  has_cowork_plugins: boolean;
+}
 
 export interface InstalledPlugin {
   name: string;
@@ -30,7 +39,7 @@ export interface InstalledPlugin {
   marketplace: string;
   installed_at: string;
   install_path: string;
-  targets: string[];
+  targets: string[]; // "claude-code" | "cowork:{space_id}:{label}"
 }
 
 export interface PluginUpdateInfo {
@@ -42,9 +51,8 @@ export interface PluginUpdateInfo {
 
 export interface TargetInfo {
   claude_code: boolean;
-  claude_cowork: boolean;
   claude_code_path: string | null;
-  cowork_path: string | null;
+  cowork_spaces: CoworkSpace[];
 }
 
 export interface AppInfo {
@@ -204,14 +212,15 @@ export async function installPlugin(pluginName: string, target: InstallTarget = 
     return invoke('install_plugin', { request: { plugin_name: pluginName, version, target } });
   }
   // Web mode can't install locally — just simulate success
+  const targetStr = target === 'claude-code' ? 'claude-code' : `cowork:${target}:Demo`;
   return {
     name: pluginName,
     version: version || '0.0.0',
     description: '',
-    marketplace: 'reumbra-plugins',
+    marketplace: 'reumbra',
     installed_at: new Date().toISOString(),
     install_path: 'web-mode/not-installed',
-    targets: [target],
+    targets: [targetStr],
   };
 }
 
@@ -240,22 +249,6 @@ export async function checkPluginUpdates(): Promise<PluginUpdateInfo[]> {
   return [];
 }
 
-export async function getCoworkPath(): Promise<string | null> {
-  if (isTauri) {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return invoke('get_cowork_path');
-  }
-  return null;
-}
-
-export async function setCoworkPath(path: string): Promise<void> {
-  if (isTauri) {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return invoke('set_cowork_path', { path });
-  }
-  // Web mode — no-op
-}
-
 export async function sendFeedback(feedbackType: string, message: string): Promise<void> {
   if (demoMode) return;
   if (isTauri) {
@@ -276,9 +269,16 @@ export async function getAppInfo(): Promise<AppInfo> {
     return invoke('get_app_info');
   }
   return {
-    version: '0.1.1 (web)',
+    version: '0.4.0 (web)',
     machine_id: webMachineId,
-    targets: { claude_code: false, claude_cowork: false, claude_code_path: null, cowork_path: null },
+    targets: {
+      claude_code: true,
+      claude_code_path: null,
+      cowork_spaces: [
+        { id: 'personal-abc', label: 'Personal', path: '/mock/personal', is_org: false, has_cowork_plugins: true },
+        { id: 'org-xyz', label: 'GoodieMate', path: '/mock/org', is_org: true, has_cowork_plugins: false },
+      ],
+    },
     config_dir: null,
     os: navigator.platform,
   };

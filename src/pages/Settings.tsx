@@ -73,13 +73,13 @@ export default function SettingsPage({ license, onDeactivated }: Props) {
       {appInfo && (
         <Section title="Environment">
           <InfoRow
-            label="Claude Cowork"
-            value={appInfo.targets.claude_cowork ? 'Detected' : 'Not found'}
-            warn={!appInfo.targets.claude_cowork}
+            label="Cowork Spaces"
+            value={appInfo.targets.cowork_spaces.length > 0 ? `${appInfo.targets.cowork_spaces.length} detected` : 'Not found'}
+            warn={appInfo.targets.cowork_spaces.length === 0}
           />
-          {appInfo.targets.cowork_path && (
-            <InfoRow label="" value={appInfo.targets.cowork_path} mono small />
-          )}
+          {appInfo.targets.cowork_spaces.map((s) => (
+            <InfoRow key={s.id} label="" value={`${s.label}${s.is_org ? ' (org)' : ''} — ${s.path}`} mono small />
+          ))}
           <InfoRow
             label="Claude Code"
             value={appInfo.targets.claude_code ? 'Detected' : 'Not found'}

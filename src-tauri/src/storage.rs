@@ -190,31 +190,49 @@ pub fn detect_targets() -> TargetInfo {
     }
 }
 
-/// Find the cowork_plugins directory by scanning local-agent-mode-sessions/{session}/{user}/
-/// Returns the first cowork_plugins dir found (typically there's one session with one user).
+/// Find the cowork_plugins directory by scanning session dirs.
+/// Checks both new (claude-code-sessions) and legacy (local-agent-mode-sessions) paths.
+/// Returns the first cowork_plugins dir found (personal account).
 pub fn find_cowork_plugins_dir() -> Option<PathBuf> {
     let config = dirs::config_dir()?;
-    let sessions_dir = config.join("Claude").join("local-agent-mode-sessions");
-    if !sessions_dir.exists() {
-        return None;
+    let claude_dir = config.join("Claude");
+
+    // Prefer new path, fall back to legacy
+    let candidates = [
+        claude_dir.join("claude-code-sessions"),
+        claude_dir.join("local-agent-mode-sessions"),
+    ];
+
+    for sessions_dir in &candidates {
+        if !sessions_dir.exists() {
+            continue;
+        }
+
+        if let Some(found) = scan_for_cowork_plugins(sessions_dir) {
+            return Some(found);
+        }
     }
 
-    // Scan: sessions_dir/{sessionId}/{userId}/cowork_plugins/
-    for session_entry in fs::read_dir(&sessions_dir).ok()? {
+    None
+}
+
+/// Scan sessions_dir/{sessionId}/{accountId}/cowork_plugins/
+fn scan_for_cowork_plugins(sessions_dir: &Path) -> Option<PathBuf> {
+    for session_entry in fs::read_dir(sessions_dir).ok()? {
         let session_entry = session_entry.ok()?;
         let session_path = session_entry.path();
         if !session_path.is_dir() || session_entry.file_name() == "skills-plugin" {
             continue;
         }
 
-        for user_entry in fs::read_dir(&session_path).ok()? {
-            let user_entry = user_entry.ok()?;
-            let user_path = user_entry.path();
-            if !user_path.is_dir() {
+        for account_entry in fs::read_dir(&session_path).ok()? {
+            let account_entry = account_entry.ok()?;
+            let account_path = account_entry.path();
+            if !account_path.is_dir() {
                 continue;
             }
 
-            let cowork_plugins = user_path.join("cowork_plugins");
+            let cowork_plugins = account_path.join("cowork_plugins");
             if cowork_plugins.exists() {
                 return Some(cowork_plugins);
             }

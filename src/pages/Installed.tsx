@@ -6,10 +6,18 @@ import {
   checkPluginUpdates,
   installPlugin,
   type InstalledPlugin,
-  type InstallTarget,
   type PluginUpdateInfo,
   type AppInfo,
 } from '../lib/api';
+
+function parseCoworkTargets(targets: string[]): { id: string; label: string }[] {
+  return targets
+    .filter(t => t.startsWith('cowork:'))
+    .map(t => {
+      const [, id, ...labelParts] = t.split(':');
+      return { id, label: labelParts.join(':') || 'Cowork' };
+    });
+}
 
 export default function InstalledPage() {
   const [plugins, setPlugins] = useState<InstalledPlugin[]>([]);
@@ -43,13 +51,12 @@ export default function InstalledPage() {
     }
   };
 
-  const handleUninstall = async (name: string, fromTarget: InstallTarget) => {
-    const targetLabel = fromTarget === 'claude-code' ? 'Claude Code' : 'Claude Cowork';
+  const handleUninstall = async (name: string, target: string, targetLabel: string) => {
     if (!confirm(`Remove ${name} from ${targetLabel}?`)) return;
     setActionPlugin(name);
     setSuccessMsg('');
     try {
-      await uninstallPlugin(name, fromTarget);
+      await uninstallPlugin(name, target);
       await loadData();
     } catch (err) {
       setError(String(err));
@@ -151,10 +158,10 @@ export default function InstalledPage() {
         <div className="mb-5 flex items-center gap-3">
           <span className="text-xs text-gray-500">Integrated with:</span>
           <div className="flex items-center gap-2">
-            {appInfo.targets.claude_cowork && (
+            {appInfo.targets.cowork_spaces.length > 0 && (
               <span className="inline-flex items-center gap-1.5 text-xs text-green-400">
                 <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                Claude Cowork
+                Cowork ({appInfo.targets.cowork_spaces.length} space{appInfo.targets.cowork_spaces.length > 1 ? 's' : ''})
               </span>
             )}
             {appInfo.targets.claude_code && (
@@ -163,7 +170,7 @@ export default function InstalledPage() {
                 Claude Code
               </span>
             )}
-            {!appInfo.targets.claude_code && !appInfo.targets.claude_cowork && (
+            {!appInfo.targets.claude_code && appInfo.targets.cowork_spaces.length === 0 && (
               <span className="text-xs text-yellow-400">No Claude environment detected</span>
             )}
           </div>
@@ -196,7 +203,7 @@ export default function InstalledPage() {
             const update = getUpdate(plugin.name);
             const targets = plugin.targets || [];
             const inCode = targets.includes('claude-code');
-            const inCowork = targets.includes('claude-cowork');
+            const coworkTargets = parseCoworkTargets(targets);
 
             return (
               <div
@@ -230,26 +237,26 @@ export default function InstalledPage() {
 
                 {/* Target badges + remove buttons */}
                 <div className="mt-3 flex items-center gap-2 flex-wrap">
-                  {inCowork && (
-                    <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-purple-500/10 border border-purple-500/20 rounded text-[10px]">
+                  {coworkTargets.map((ct) => (
+                    <div key={ct.id} className="inline-flex items-center gap-1.5 px-2 py-1 bg-purple-500/10 border border-purple-500/20 rounded text-[10px]">
                       <span className="w-1.5 h-1.5 bg-purple-400 rounded-full" />
-                      <span className="text-purple-300">Cowork</span>
+                      <span className="text-purple-300">Cowork · {ct.label}</span>
                       <button
-                        onClick={() => handleUninstall(plugin.name, 'claude-cowork')}
+                        onClick={() => handleUninstall(plugin.name, ct.id, `Cowork · ${ct.label}`)}
                         disabled={actionPlugin === plugin.name}
                         className="text-purple-600 hover:text-red-400 ml-1"
-                        title="Remove from Claude Cowork"
+                        title={`Remove from Cowork · ${ct.label}`}
                       >
                         &times;
                       </button>
                     </div>
-                  )}
+                  ))}
                   {inCode && (
                     <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded text-[10px]">
                       <span className="w-1.5 h-1.5 bg-blue-400 rounded-full" />
                       <span className="text-blue-300">Code</span>
                       <button
-                        onClick={() => handleUninstall(plugin.name, 'claude-code')}
+                        onClick={() => handleUninstall(plugin.name, 'claude-code', 'Claude Code')}
                         disabled={actionPlugin === plugin.name}
                         className="text-blue-600 hover:text-red-400 ml-1"
                         title="Remove from Claude Code"
@@ -258,7 +265,7 @@ export default function InstalledPage() {
                       </button>
                     </div>
                   )}
-                  {!inCode && !inCowork && (
+                  {!inCode && coworkTargets.length === 0 && (
                     <span className="text-[10px] text-gray-600">Not integrated (files only)</span>
                   )}
                 </div>
