@@ -223,9 +223,10 @@ export default function CatalogPage({ license }: Props) {
               value={selectedSpaceId}
               onChange={(e) => setSelectedSpaceId(e.target.value)}
               className="px-2 py-1.5 text-xs bg-gray-900 border border-gray-700 rounded-lg text-gray-300 focus:border-forge-500 focus:outline-none"
+              style={{ colorScheme: 'dark' }}
             >
               {spaces.map((s) => (
-                <option key={s.id} value={s.id}>
+                <option key={s.id} value={s.id} className="bg-gray-900 text-gray-300">
                   {s.label}{s.is_org ? ' (org)' : ''}
                 </option>
               ))}
