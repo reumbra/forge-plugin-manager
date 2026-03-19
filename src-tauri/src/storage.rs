@@ -284,20 +284,20 @@ fn detect_cowork_spaces() -> Vec<CoworkSpace> {
                     continue;
                 }
 
-                seen_accounts.insert(account_name);
-
                 // Generate stable ID from path
                 let id = {
                     let hash = Sha256::digest(account_path.display().to_string().as_bytes());
                     format!("{:x}", hash)[..8].to_string()
                 };
 
-                // Label: for org, extract from first plugin's marketplaceName
+                // Label: for org, use truncated account UUID; personal = "Personal"
                 let label = if is_org {
-                    extract_org_label(remote_manifest.as_ref())
+                    format!("Org {}", &account_name[..8.min(account_name.len())])
                 } else {
                     "Personal".to_string()
                 };
+
+                seen_accounts.insert(account_name);
 
                 spaces.push(CoworkSpace {
                     id,
@@ -323,12 +323,9 @@ struct RemoteManifest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct RemotePlugin {
     #[allow(dead_code)]
     name: String,
-    marketplace_name: Option<String>,
-    installed_by: Option<String>,
 }
 
 fn read_remote_manifest(account_path: &Path) -> Option<RemoteManifest> {
@@ -337,32 +334,6 @@ fn read_remote_manifest(account_path: &Path) -> Option<RemoteManifest> {
     serde_json::from_str(&content).ok()
 }
 
-fn extract_org_label(manifest: Option<&RemoteManifest>) -> String {
-    manifest
-        .and_then(|m| {
-            // Count marketplace names among auto-installed plugins (org-pushed)
-            let mut counts: HashMap<String, usize> = HashMap::new();
-            for p in &m.plugins {
-                if p.installed_by.as_deref() == Some("auto") {
-                    if let Some(name) = &p.marketplace_name {
-                        if name != "knowledge-work-plugins" {
-                            *counts.entry(name.clone()).or_insert(0) += 1;
-                        }
-                    }
-                }
-            }
-            // Return the most frequent marketplace name
-            counts.into_iter().max_by_key(|(_, c)| *c).map(|(name, _)| {
-                // Clean up: "Owner/repo-name" → take before "/" if it looks like a repo path
-                if let Some(slash_pos) = name.find('/') {
-                    name[..slash_pos].to_string()
-                } else {
-                    name
-                }
-            })
-        })
-        .unwrap_or_else(|| "Organization".to_string())
-}
 
 
 /// Claude Code plugins directory: ~/.claude/plugins/
