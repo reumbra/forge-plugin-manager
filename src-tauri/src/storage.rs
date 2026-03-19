@@ -184,6 +184,16 @@ pub fn detect_targets() -> TargetInfo {
     // Cowork spaces: scan all sessions
     let cowork_spaces = detect_cowork_spaces();
 
+    log::info!(
+        "detect_targets: claude_code={}, claude_code_path={:?}, cowork_spaces={}",
+        claude_code,
+        claude_code_path,
+        cowork_spaces.len()
+    );
+    for space in &cowork_spaces {
+        log::info!("  space: id={} label={} is_org={} path={}", space.id, space.label, space.is_org, space.path);
+    }
+
     TargetInfo {
         claude_code,
         claude_code_path: if claude_code { claude_code_path.map(|p| p.display().to_string()) } else { None },
@@ -207,16 +217,23 @@ fn detect_cowork_spaces() -> Vec<CoworkSpace> {
 
     // WSL: also check Windows-side Claude data via /mnt/c/
     if cfg!(target_os = "linux") {
+        log::info!("detect_cowork_spaces: checking WSL /mnt/c/Users");
         if let Ok(entries) = fs::read_dir("/mnt/c/Users") {
             for entry in entries.flatten() {
                 let win_claude = entry.path().join("AppData/Roaming/Claude");
+                log::info!("  checking: {}", win_claude.display());
                 if win_claude.exists() {
                     candidates.push(win_claude.join("claude-code-sessions"));
                     candidates.push(win_claude.join("local-agent-mode-sessions"));
+                    log::info!("  found Claude dir: {}", win_claude.display());
                 }
             }
+        } else {
+            log::warn!("detect_cowork_spaces: cannot read /mnt/c/Users");
         }
     }
+
+    log::info!("detect_cowork_spaces: {} candidate dirs", candidates.len());
 
     let mut spaces = Vec::new();
     let mut seen_accounts: HashSet<String> = HashSet::new();

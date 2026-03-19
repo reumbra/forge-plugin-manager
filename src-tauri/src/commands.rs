@@ -246,11 +246,13 @@ pub async fn send_feedback(
 
 #[tauri::command]
 pub fn get_app_info(state: State<'_, AppState>) -> AppInfo {
-    AppInfo {
+    let info = AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         machine_id: state.machine_id.clone(),
         targets: storage::detect_targets(),
         config_dir: storage::config_dir().ok().map(|p| p.display().to_string()),
         os: std::env::consts::OS.to_string(),
-    }
+    };
+    log::info!("get_app_info response: {}", serde_json::to_string(&info).unwrap_or_default());
+    info
 }

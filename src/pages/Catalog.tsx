@@ -68,14 +68,16 @@ export default function CatalogPage({ license }: Props) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [catalog, inst, info] = await Promise.all([
+      // Load app info first (never fails) — needed for target detection
+      const info = await getAppInfo().catch(() => null);
+      setAppInfo(info);
+
+      const [catalog, inst] = await Promise.all([
         getPluginCatalog(),
         getInstalledPlugins().catch(() => []),
-        getAppInfo().catch(() => null),
       ]);
       setPlugins(catalog);
       setInstalled(inst);
-      setAppInfo(info);
 
       // Auto-select: prefer org cowork space, fallback to first space, then code
       if (info) {
