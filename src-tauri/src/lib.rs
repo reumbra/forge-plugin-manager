@@ -26,8 +26,6 @@ pub fn run() {
             uninstall_plugin,
             get_installed_plugins,
             check_plugin_updates,
-            get_cowork_path,
-            set_cowork_path,
             send_feedback,
             get_app_info,
         ])

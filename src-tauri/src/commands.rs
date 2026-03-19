@@ -6,7 +6,7 @@ use tauri::State;
 use crate::api::{ApiClient, FeedbackRequest, LicenseInfo, PluginInfo};
 use crate::error::AppError;
 use crate::machine;
-use crate::storage::{self, InstalledPlugin, InstallTarget, TargetInfo};
+use crate::storage::{self, InstalledPlugin, TargetInfo};
 
 /// App state managed by Tauri
 pub struct AppState {
@@ -41,7 +41,7 @@ pub struct AppInfo {
 pub struct InstallRequest {
     pub plugin_name: String,
     pub version: Option<String>,
-    pub target: InstallTarget,
+    pub target: String, // "claude-code" or cowork space_id
 }
 
 #[derive(Serialize)]
@@ -168,16 +168,16 @@ pub async fn install_plugin(
         &request.plugin_name,
         &download.version,
         &zip_data,
-        request.target,
+        &request.target,
     )
 }
 
 #[tauri::command]
 pub async fn uninstall_plugin(
     plugin_name: String,
-    target: InstallTarget,
+    target: String,
 ) -> Result<(), AppError> {
-    storage::uninstall_plugin(&plugin_name, target)
+    storage::uninstall_plugin(&plugin_name, &target)
 }
 
 #[tauri::command]
@@ -218,18 +218,6 @@ pub async fn check_plugin_updates(
         .collect();
 
     Ok(updates)
-}
-
-#[tauri::command]
-pub fn get_cowork_path() -> Option<String> {
-    let targets = storage::detect_targets();
-    targets.cowork_path
-}
-
-#[tauri::command]
-pub fn set_cowork_path(_path: String) -> Result<(), AppError> {
-    // Legacy command — kept for frontend compat, no-op now
-    Ok(())
 }
 
 #[tauri::command]
