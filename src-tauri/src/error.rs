@@ -23,6 +23,9 @@ pub enum AppError {
     #[error("Plugin error: {0}")]
     #[allow(dead_code)]
     Plugin(String),
+
+    #[error("Cowork not found: {0}")]
+    CoworkNotFound(String),
 }
 
 impl Serialize for AppError {

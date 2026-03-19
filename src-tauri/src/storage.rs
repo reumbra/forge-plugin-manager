@@ -200,10 +200,23 @@ fn detect_cowork_spaces() -> Vec<CoworkSpace> {
     };
     let claude_dir = config.join("Claude");
 
-    let candidates = [
+    let mut candidates = vec![
         claude_dir.join("claude-code-sessions"),
         claude_dir.join("local-agent-mode-sessions"),
     ];
+
+    // WSL: also check Windows-side Claude data via /mnt/c/
+    if cfg!(target_os = "linux") {
+        if let Ok(entries) = fs::read_dir("/mnt/c/Users") {
+            for entry in entries.flatten() {
+                let win_claude = entry.path().join("AppData/Roaming/Claude");
+                if win_claude.exists() {
+                    candidates.push(win_claude.join("claude-code-sessions"));
+                    candidates.push(win_claude.join("local-agent-mode-sessions"));
+                }
+            }
+        }
+    }
 
     let mut spaces = Vec::new();
     let mut seen_accounts: HashSet<String> = HashSet::new();
@@ -324,57 +337,6 @@ fn extract_org_label(manifest: Option<&RemoteManifest>) -> String {
         .unwrap_or_else(|| "Organization".to_string())
 }
 
-/// Find the cowork_plugins directory by scanning session dirs.
-/// Checks both new (claude-code-sessions) and legacy (local-agent-mode-sessions) paths.
-/// Returns the first cowork_plugins dir found (personal account).
-pub fn find_cowork_plugins_dir() -> Option<PathBuf> {
-    let config = dirs::config_dir()?;
-    let claude_dir = config.join("Claude");
-
-    // Prefer new path, fall back to legacy
-    let candidates = [
-        claude_dir.join("claude-code-sessions"),
-        claude_dir.join("local-agent-mode-sessions"),
-    ];
-
-    for sessions_dir in &candidates {
-        if !sessions_dir.exists() {
-            continue;
-        }
-
-        if let Some(found) = scan_for_cowork_plugins(sessions_dir) {
-            return Some(found);
-        }
-    }
-
-    None
-}
-
-/// Scan sessions_dir/{sessionId}/{accountId}/cowork_plugins/
-fn scan_for_cowork_plugins(sessions_dir: &Path) -> Option<PathBuf> {
-    for session_entry in fs::read_dir(sessions_dir).ok()? {
-        let session_entry = session_entry.ok()?;
-        let session_path = session_entry.path();
-        if !session_path.is_dir() || session_entry.file_name() == "skills-plugin" {
-            continue;
-        }
-
-        for account_entry in fs::read_dir(&session_path).ok()? {
-            let account_entry = account_entry.ok()?;
-            let account_path = account_entry.path();
-            if !account_path.is_dir() {
-                continue;
-            }
-
-            let cowork_plugins = account_path.join("cowork_plugins");
-            if cowork_plugins.exists() {
-                return Some(cowork_plugins);
-            }
-        }
-    }
-
-    None
-}
 
 /// Claude Code plugins directory: ~/.claude/plugins/
 #[allow(dead_code)]
