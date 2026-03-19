@@ -70,9 +70,16 @@ export default function InstalledPage() {
     setError('');
     setSuccessMsg('');
     try {
-      await installPlugin(name);
+      // Re-install to ALL targets where the plugin is currently installed
+      const plugin = plugins.find(p => p.name === name);
+      const targets = plugin?.targets ?? ['claude-code'];
+      for (const t of targets) {
+        // Extract target id: "claude-code" stays as-is, "cowork:{id}:{label}" → extract {id}
+        const targetId = t.startsWith('cowork:') ? t.split(':')[1] : t;
+        await installPlugin(name, targetId);
+      }
       await loadData();
-      setSuccessMsg(`${name} updated. Restart your Claude session to load changes.`);
+      setSuccessMsg(`${name} updated in ${targets.length} target${targets.length > 1 ? 's' : ''}. Restart your Claude session to load changes.`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -92,7 +99,13 @@ export default function InstalledPage() {
     for (const upd of pluginsWithUpdates) {
       try {
         setActionPlugin(upd.name);
-        await installPlugin(upd.name);
+        // Re-install to all targets where the plugin is installed
+        const plugin = plugins.find(p => p.name === upd.name);
+        const targets = plugin?.targets ?? ['claude-code'];
+        for (const t of targets) {
+          const targetId = t.startsWith('cowork:') ? t.split(':')[1] : t;
+          await installPlugin(upd.name, targetId);
+        }
         updated.push(upd.name);
       } catch (err) {
         setError(`Failed to update ${upd.name}: ${String(err)}`);
