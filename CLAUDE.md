@@ -4,7 +4,8 @@
 
 **forge-plugin-manager** — Tauri 2 desktop app for managing Forge plugins in Claude Cowork. Handles license activation, plugin catalog browsing, install/update/remove, and feedback.
 
-**Status:** v0.4.0 — Dynamic catalog, dual-target install (Claude Code + Cowork), macOS builds.
+**Status:** v0.5.3 — owner-schema + installPath + enabledPlugins bugfix (Phase E, 2026-05-28).
+**Pending Phase F (BL-072 candidate)**: Install target relocation to `~/.claude/plugins/marketplaces/reumbra/` canonical path. Current `marketplace_dir()` writes to `%APPDATA%/forge-devkit/marketplace/` which fails Claude Code's `LocalPluginsReader` out-of-bounds check (`Skipping plugin with invalid path` → plugin invisible in Code view). Empirically verified canonical layout — see "Plugin Installation Architecture" below.
 
 ## Ecosystem Contract
 
@@ -54,33 +55,60 @@ All API calls go to `https://api.reumbra.com/velvet` (forge-devkit-api):
 - `GET /plugins/versions/:name` — version history
 - `POST /feedback` — user feedback
 
-## Cowork Integration
+## Plugin Installation Architecture
 
-### Personal accounts (implemented)
+### Empirically verified 2026-05-28 — supersedes all prior Cowork integration assumptions
 
-Plugin installation into personal Cowork accounts via `cowork_plugins/`:
-- Marketplace dir: `cowork_plugins/marketplaces/reumbra/{plugin-name}/`
-- Cache dir: `cowork_plugins/cache/reumbra/{plugin-name}/{version}/`
-- Registry: `cowork_plugins/installed_plugins.json` (v2 format)
-- Known marketplaces: `cowork_plugins/known_marketplaces.json`
-- Key format: `{plugin-name}@reumbra`
-- Detection: scan `{config_dir}/Claude/local-agent-mode-sessions/{session}/{user}/cowork_plugins/`
+**Single canonical install target** for Claude Desktop (Cowork view + Code view) and Claude Code CLI: `~/.claude/plugins/marketplaces/<marketplace-name>/`. There is no longer any separate "Cowork install" — both views read from this same location.
 
-### Organization accounts (VERIFIED)
+### Required layout
 
-Org accounts have two plugin systems running in parallel:
-- **`remote_cowork_plugins/`** — cloud-synced org plugins (read-only, managed by Anthropic)
-- **`cowork_plugins/`** — personal plugins (writable, same format as personal account)
+```
+~/.claude/plugins/                                                  ← CLI store root
+├── known_marketplaces.json                                         ← marketplace registry
+├── installed_plugins.json                                          ← installed list + installPath
+└── marketplaces/<marketplace>/                                     ← marketplace dir
+    ├── .claude-plugin/marketplace.json                             ← catalog
+    │   └── owner MUST be {name, email} object (not string)         ← Cowork schema validation
+    └── plugins/<plugin>/                                           ← plugin files (NO version subdir)
+        ├── .claude-plugin/plugin.json
+        ├── skills/
+        ├── agents/
+        └── commands/
 
-Org sessions do NOT create `cowork_plugins/` by default. Our approach: create it alongside `remote_cowork_plugins/` with the same 4-location format as personal accounts. Cowork internally uses Claude CLI with `--cowork` flag, which reads `cowork_plugins/` independently.
+~/.claude/settings.json                                             ← enabledPlugins["<plugin>@<marketplace>"] = true
+```
 
-**Detection:**
-- Personal account: has `cowork_plugins/` dir
-- Org account: has `remote_cowork_plugins/` with non-empty `manifest.json`, may or may not have `cowork_plugins/`
+Windows host path: `%USERPROFILE%\.claude\plugins\...`. macOS/Linux: `~/.claude/plugins/...`.
 
-**Path migration:** Claude Desktop v1.1.4498+ uses `claude-code-sessions/` instead of `local-agent-mode-sessions/` — code checks both.
+`cache/` subdir is **only** used by Claude Code for github-source marketplaces (it fetches + caches there). For our directory-source `reumbra`, the marketplace dir IS the install location — no caching needed.
 
-See ecosystem contract (section 9) for full path documentation and env vars.
+### Hard rules enforced by Claude Desktop
+
+1. **Out-of-bounds installPath rejection** — `[LocalPluginsReader] Skipping plugin with invalid path` appears for any path outside `~/.claude/`. **Never** write install targets to `%APPDATA%/forge-devkit/`, `%LOCALAPPDATA%/`, or anywhere outside the user's `.claude` dir.
+
+2. **`owner` schema** — `marketplace.json::owner` must be `{name, email}` object. String values cause `[CCDMarketplacePluginManagerCLI] Failed to refresh marketplace: ... owner: Invalid input: expected object, received string`.
+
+3. **No locally-faked rpm entries** — `local-agent-mode-sessions/<owner>/<workspace>/rpm/manifest.json` is server-authoritative. Desktop wipes any entry whose `marketplaceId` doesn't resolve against Anthropic's backend on next launch. Code view's "Anthropic" tab is reserved for Anthropic-curated marketplaces.
+
+### Legacy code to retire (Phase F+)
+
+- **`src-tauri/src/cowork.rs`** — fully legacy. Targets `cowork_plugins/` store in `local-agent-mode-sessions/<owner>/<workspace>/`, which the current Desktop only reads as fallback for the Cowork sidebar (never writes). Delete after Phase F migration ships.
+- **`integrate_cowork_space()`** in `storage.rs` — same legacy path family. Same fate.
+- **Workspace selector for Cowork target** in UI — obsolete; single global install target now covers both views. Phase F should simplify UI to one "Install" button.
+
+### Migration plan (Phase F brief, pending)
+
+For existing customer installs already at `%APPDATA%/forge-devkit/marketplace/`:
+1. On first launch of fixed Plugin Manager, detect old marketplace dir
+2. Move (or copy) to `~/.claude/plugins/marketplaces/reumbra/`
+3. Rewrite `known_marketplaces.json::reumbra::source.path` and `installLocation` to new absolute path
+4. Rewrite each `installed_plugins.json::<key>::installPath` to `~/.claude/plugins/marketplaces/reumbra/plugins/<name>/`
+5. Optionally delete old `%APPDATA%/forge-devkit/marketplace/` after successful migration
+
+For new installs: write directly to canonical location, no migration.
+
+See `memory/claude-desktop-plugin-architecture.md` in the AI Marketplace repo for the full evidence trail (log lines, security gate names, store comparison) behind these rules.
 
 ## Development
 

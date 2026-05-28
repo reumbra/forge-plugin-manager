@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
@@ -434,16 +435,19 @@ fn update_marketplace_manifest(
 
     fs::create_dir_all(manifest_path.parent().unwrap())?;
 
+    // Claude Desktop requires owner to be an object; normalize API/string data on every write.
+    let marketplace_owner = serde_json::json!({"name": "Reumbra", "email": "support@reumbra.dev"});
     let mut manifest = if manifest_path.exists() {
         let content = fs::read_to_string(&manifest_path)?;
         serde_json::from_str(&content)?
     } else {
         MarketplaceManifest {
             name: MARKETPLACE_NAME.to_string(),
-            owner: serde_json::json!({"name": "Reumbra", "email": "support@reumbra.dev"}),
+            owner: marketplace_owner.clone(),
             plugins: Vec::new(),
         }
     };
+    manifest.owner = marketplace_owner;
 
     // Update or add plugin entry
     let source = format!("./plugins/{}", plugin_name);
@@ -480,6 +484,7 @@ fn integrate_claude_code(plugin_name: &str) -> Result<(), AppError> {
 
     let plugins_dir = claude_dir.join("plugins");
     fs::create_dir_all(&plugins_dir)?;
+    let now = Utc::now().to_rfc3339();
 
     // 1. Register marketplace in known_marketplaces.json
     let km_path = plugins_dir.join("known_marketplaces.json");
@@ -496,7 +501,7 @@ fn integrate_claude_code(plugin_name: &str) -> Result<(), AppError> {
     km[MARKETPLACE_NAME] = serde_json::json!({
         "source": { "source": "directory", "path": mkt_path },
         "installLocation": mkt_path,
-        "lastUpdated": Utc::now().to_rfc3339()
+        "lastUpdated": &now
     });
     fs::write(&km_path, serde_json::to_string_pretty(&km)?)?;
     log::info!("Registered marketplace in Claude Code at {}", mkt_path);
@@ -518,7 +523,10 @@ fn integrate_claude_code(plugin_name: &str) -> Result<(), AppError> {
     fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
 
     // 3. Invalidate stale cache
-    let cache_plugin = plugins_dir.join("cache").join(MARKETPLACE_NAME).join(plugin_name);
+    let cache_plugin = plugins_dir
+        .join("cache")
+        .join(MARKETPLACE_NAME)
+        .join(plugin_name);
     if cache_plugin.exists() {
         let _ = fs::remove_dir_all(&cache_plugin);
         log::info!("Cleared stale cache for {}", plugin_name);
@@ -530,19 +538,71 @@ fn integrate_claude_code(plugin_name: &str) -> Result<(), AppError> {
         log::info!("Cleared stale active copy for {}", plugin_name);
     }
 
-    // Remove from installed_plugins.json
+    // 4. Write installed_plugins.json with the real extracted plugin path.
+    write_claude_code_installed_plugin(&plugins_dir, plugin_name, &now)?;
+
+    Ok(())
+}
+
+fn write_claude_code_installed_plugin(
+    plugins_dir: &Path,
+    plugin_name: &str,
+    timestamp: &str,
+) -> Result<(), AppError> {
+    let plugin_dir = marketplace_dir()?.join("plugins").join(plugin_name);
+    let manifest_path = plugin_dir.join(".claude-plugin").join("plugin.json");
+    let manifest: PluginManifest = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    let install_path = plugin_dir
+        .canonicalize()
+        .unwrap_or_else(|_| plugin_dir.clone())
+        .display()
+        .to_string();
+
     let ip_path = plugins_dir.join("installed_plugins.json");
-    if ip_path.exists() {
+    let mut ip: Value = if ip_path.exists() {
         let content = fs::read_to_string(&ip_path)?;
-        let mut ip: serde_json::Value = serde_json::from_str(&content)?;
-        if let Some(plugins) = ip.get_mut("plugins") {
-            if plugins.is_object() {
-                plugins.as_object_mut().unwrap().remove(&plugin_key);
-                fs::write(&ip_path, serde_json::to_string_pretty(&ip)?)?;
-            }
-        }
+        serde_json::from_str(&content)?
+    } else {
+        serde_json::json!({ "version": 2, "plugins": {} })
+    };
+
+    if ip.get("version").is_none() {
+        ip["version"] = serde_json::json!(2);
+    }
+    if !matches!(ip.get("plugins"), Some(Value::Object(_))) {
+        ip["plugins"] = serde_json::json!({});
     }
 
+    let plugin_key = format!("{}@{}", plugin_name, MARKETPLACE_NAME);
+    ip["plugins"][&plugin_key] = serde_json::json!([{
+        "scope": "user",
+        "installPath": install_path,
+        "version": manifest.version,
+        "installedAt": timestamp,
+        "lastUpdated": timestamp
+    }]);
+    fs::write(&ip_path, serde_json::to_string_pretty(&ip)?)?;
+    Ok(())
+}
+
+fn remove_claude_code_installed_plugin(
+    plugins_dir: &Path,
+    plugin_key: &str,
+) -> Result<(), AppError> {
+    let ip_path = plugins_dir.join("installed_plugins.json");
+    if !ip_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&ip_path)?;
+    let mut ip: Value = serde_json::from_str(&content)?;
+    if let Some(plugins) = ip
+        .get_mut("plugins")
+        .and_then(|plugins| plugins.as_object_mut())
+    {
+        plugins.remove(plugin_key);
+    }
+    fs::write(&ip_path, serde_json::to_string_pretty(&ip)?)?;
     Ok(())
 }
 
@@ -695,10 +755,14 @@ pub fn uninstall_plugin(plugin_name: &str, target: &str) -> Result<(), AppError>
 
             // Clear cache so Code doesn't load stale copy
             let plugins_dir = home.join(".claude").join("plugins");
-            let cache_plugin = plugins_dir.join("cache").join(MARKETPLACE_NAME).join(plugin_name);
+            let cache_plugin = plugins_dir
+                .join("cache")
+                .join(MARKETPLACE_NAME)
+                .join(plugin_name);
             if cache_plugin.exists() {
                 let _ = fs::remove_dir_all(&cache_plugin);
             }
+            remove_claude_code_installed_plugin(&plugins_dir, &plugin_key)?;
         }
     } else {
         // target is a cowork space_id — resolve to path
@@ -959,8 +1023,88 @@ fn extract_zip(data: &[u8], dest: &Path) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    static CLAUDE_CODE_TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn set(vars: Vec<(&'static str, OsString)>) -> Self {
+            let saved = vars
+                .iter()
+                .map(|(key, _)| (*key, std::env::var_os(key)))
+                .collect();
+            for (key, value) in vars {
+                std::env::set_var(key, value);
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+    }
+
+    fn with_temp_app_env<T>(run: impl FnOnce(&Path) -> T) -> T {
+        let _lock = CLAUDE_CODE_TEST_ENV_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let config = tmp.path().join("config");
+        let local = tmp.path().join("local");
+
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::create_dir_all(&config).unwrap();
+        fs::create_dir_all(&local).unwrap();
+
+        let _env = EnvGuard::set(vec![
+            ("HOME", home.as_os_str().to_os_string()),
+            ("USERPROFILE", home.as_os_str().to_os_string()),
+            ("XDG_CONFIG_HOME", config.as_os_str().to_os_string()),
+            ("APPDATA", config.as_os_str().to_os_string()),
+            ("LOCALAPPDATA", local.as_os_str().to_os_string()),
+        ]);
+
+        run(&home)
+    }
+
+    fn create_marketplace_plugin(plugin_name: &str, version: &str) -> PathBuf {
+        let plugin_dir = marketplace_dir().unwrap().join("plugins").join(plugin_name);
+        fs::create_dir_all(plugin_dir.join(".claude-plugin")).unwrap();
+        fs::create_dir_all(plugin_dir.join("skills")).unwrap();
+        fs::write(plugin_dir.join("skills").join("README.md"), "fixture skill").unwrap();
+
+        let manifest = serde_json::json!({
+            "name": plugin_name,
+            "version": version,
+            "description": "Fixture plugin"
+        });
+        fs::write(
+            plugin_dir.join(".claude-plugin").join("plugin.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        plugin_dir
+    }
+
+    fn read_json(path: impl AsRef<Path>) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
 
     // --- MarketplaceManifest serde ---
 
@@ -1019,6 +1163,115 @@ mod tests {
         assert!(manifest.plugins.is_empty());
     }
 
+    // --- Claude Code integration regressions ---
+
+    #[test]
+    fn claude_code_marketplace_owner_is_object() {
+        with_temp_app_env(|_| {
+            let manifest_path = marketplace_dir()
+                .unwrap()
+                .join(".claude-plugin")
+                .join("marketplace.json");
+            fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+            fs::write(
+                &manifest_path,
+                serde_json::json!({
+                    "name": MARKETPLACE_NAME,
+                    "owner": "Reumbra",
+                    "plugins": []
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            update_marketplace_manifest("forge-core", "6.0.0", "Core plugin").unwrap();
+
+            let manifest = read_json(&manifest_path);
+            assert!(manifest["owner"].is_object());
+            assert_eq!(manifest["owner"]["name"], "Reumbra");
+            assert_eq!(manifest["owner"]["email"], "support@reumbra.dev");
+        });
+    }
+
+    #[test]
+    fn claude_code_install_path_points_to_real_dir() {
+        with_temp_app_env(|home| {
+            let plugin_dir = create_marketplace_plugin("forge-core", "6.0.0");
+            update_marketplace_manifest("forge-core", "6.0.0", "Core plugin").unwrap();
+
+            integrate_claude_code("forge-core").unwrap();
+
+            let installed_plugins = read_json(
+                home.join(".claude")
+                    .join("plugins")
+                    .join("installed_plugins.json"),
+            );
+            let entry = &installed_plugins["plugins"]["forge-core@reumbra"][0];
+            let install_path = PathBuf::from(entry["installPath"].as_str().unwrap());
+
+            assert!(install_path.is_absolute());
+            assert_eq!(install_path, plugin_dir.canonicalize().unwrap());
+            assert!(install_path.exists());
+            assert!(install_path
+                .join(".claude-plugin")
+                .join("plugin.json")
+                .exists());
+            assert!(["skills", "agents", "commands"]
+                .iter()
+                .any(|dir| install_path.join(dir).exists()));
+            assert_eq!(entry["version"], "6.0.0");
+        });
+    }
+
+    #[test]
+    fn claude_code_enables_plugin_in_settings() {
+        with_temp_app_env(|home| {
+            create_marketplace_plugin("forge-core", "6.0.0");
+            update_marketplace_manifest("forge-core", "6.0.0", "Core plugin").unwrap();
+
+            integrate_claude_code("forge-core").unwrap();
+
+            let settings = read_json(home.join(".claude").join("settings.json"));
+            assert_eq!(settings["enabledPlugins"]["forge-core@reumbra"], true);
+        });
+    }
+
+    #[test]
+    fn claude_code_uninstall_removes_settings_entry() {
+        with_temp_app_env(|home| {
+            create_marketplace_plugin("forge-core", "6.0.0");
+            update_marketplace_manifest("forge-core", "6.0.0", "Core plugin").unwrap();
+            integrate_claude_code("forge-core").unwrap();
+
+            uninstall_plugin("forge-core", "claude-code").unwrap();
+
+            let settings = read_json(home.join(".claude").join("settings.json"));
+            assert!(settings["enabledPlugins"]
+                .get("forge-core@reumbra")
+                .is_none());
+        });
+    }
+
+    #[test]
+    fn claude_code_uninstall_removes_installed_plugins_entry() {
+        with_temp_app_env(|home| {
+            create_marketplace_plugin("forge-core", "6.0.0");
+            update_marketplace_manifest("forge-core", "6.0.0", "Core plugin").unwrap();
+            integrate_claude_code("forge-core").unwrap();
+
+            uninstall_plugin("forge-core", "claude-code").unwrap();
+
+            let installed_plugins = read_json(
+                home.join(".claude")
+                    .join("plugins")
+                    .join("installed_plugins.json"),
+            );
+            assert!(installed_plugins["plugins"]
+                .get("forge-core@reumbra")
+                .is_none());
+        });
+    }
+
     // --- ForgeConfig serde ---
 
     #[test]
@@ -1032,16 +1285,20 @@ mod tests {
 
     #[test]
     fn forge_config_roundtrip() {
-        let mut config = ForgeConfig::default();
-        config.license_key = Some("FRG-ABCD-EFGH-IJKL".to_string());
-        config.plan = Some("pro".to_string());
-        config.installed_plugins.insert(
+        let mut installed_plugins = std::collections::HashMap::new();
+        installed_plugins.insert(
             "forge-core".to_string(),
             InstalledPluginEntry {
                 version: "6.0.0".to_string(),
                 installed_at: "2026-03-08T00:00:00Z".to_string(),
             },
         );
+        let config = ForgeConfig {
+            license_key: Some("FRG-ABCD-EFGH-IJKL".to_string()),
+            plan: Some("pro".to_string()),
+            installed_plugins,
+            ..Default::default()
+        };
 
         let json = serde_json::to_string(&config).unwrap();
         let restored: ForgeConfig = serde_json::from_str(&json).unwrap();
