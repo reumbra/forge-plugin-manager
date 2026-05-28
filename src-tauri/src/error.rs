@@ -26,6 +26,9 @@ pub enum AppError {
 
     #[error("Cowork not found: {0}")]
     CoworkNotFound(String),
+
+    #[error("{0}")]
+    Other(String),
 }
 
 impl Serialize for AppError {

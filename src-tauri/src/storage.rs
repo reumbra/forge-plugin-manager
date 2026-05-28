@@ -46,10 +46,12 @@ pub struct InstalledPluginEntry {
 pub fn config_dir() -> Result<PathBuf, AppError> {
     dirs::config_dir()
         .map(|d| d.join(APP_DIR_NAME))
-        .ok_or_else(|| AppError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Cannot determine config directory",
-        )))
+        .ok_or_else(|| {
+            AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Cannot determine config directory",
+            ))
+        })
 }
 
 /// Get the forge-devkit cache directory.
@@ -60,15 +62,23 @@ pub fn config_dir() -> Result<PathBuf, AppError> {
 pub fn cache_dir() -> Result<PathBuf, AppError> {
     dirs::cache_dir()
         .map(|d| d.join(APP_DIR_NAME))
-        .ok_or_else(|| AppError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Cannot determine cache directory",
-        )))
+        .ok_or_else(|| {
+            AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Cannot determine cache directory",
+            ))
+        })
 }
 
 /// Path to the marketplace directory
 pub fn marketplace_dir() -> Result<PathBuf, AppError> {
-    Ok(config_dir()?.join("marketplace"))
+    let home = dirs::home_dir()
+        .ok_or_else(|| AppError::Other("Cannot determine home directory".into()))?;
+    Ok(home
+        .join(".claude")
+        .join("plugins")
+        .join("marketplaces")
+        .join(MARKETPLACE_NAME))
 }
 
 /// Path to config.json
@@ -107,10 +117,12 @@ pub fn save_config(config: &ForgeConfig) -> Result<(), AppError> {
 
 /// One-time migration from ~/.forge/config.json to OS-standard path
 fn migrate_legacy_config(new_path: &Path) -> Result<(), AppError> {
-    let home = dirs::home_dir().ok_or_else(|| AppError::Io(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        "Cannot determine home directory",
-    )))?;
+    let home = dirs::home_dir().ok_or_else(|| {
+        AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Cannot determine home directory",
+        ))
+    })?;
 
     let legacy_config = home.join(".forge").join("config.json");
     if !legacy_config.exists() {
@@ -192,12 +204,22 @@ pub fn detect_targets() -> TargetInfo {
         cowork_spaces.len()
     );
     for space in &cowork_spaces {
-        log::info!("  space: id={} label={} is_org={} path={}", space.id, space.label, space.is_org, space.path);
+        log::info!(
+            "  space: id={} label={} is_org={} path={}",
+            space.id,
+            space.label,
+            space.is_org,
+            space.path
+        );
     }
 
     TargetInfo {
         claude_code,
-        claude_code_path: if claude_code { claude_code_path.map(|p| p.display().to_string()) } else { None },
+        claude_code_path: if claude_code {
+            claude_code_path.map(|p| p.display().to_string())
+        } else {
+            None
+        },
         cowork_spaces,
     }
 }
@@ -310,12 +332,12 @@ struct RemotePlugin {
 }
 
 fn read_remote_manifest(account_path: &Path) -> Option<RemoteManifest> {
-    let manifest_path = account_path.join("remote_cowork_plugins").join("manifest.json");
+    let manifest_path = account_path
+        .join("remote_cowork_plugins")
+        .join("manifest.json");
     let content = fs::read_to_string(manifest_path).ok()?;
     serde_json::from_str(&content).ok()
 }
-
-
 
 /// Claude Code plugins directory: ~/.claude/plugins/
 #[allow(dead_code)]
@@ -362,6 +384,8 @@ pub fn install_plugin_from_zip(
     zip_data: &[u8],
     target: &str,
 ) -> Result<InstalledPlugin, AppError> {
+    migrate_legacy_marketplace_if_present()?;
+
     // Always extract to our own marketplace dir first (source of truth)
     let mkt_dir = marketplace_dir()?;
     let plugin_dir = mkt_dir.join("plugins").join(plugin_name);
@@ -398,7 +422,10 @@ pub fn install_plugin_from_zip(
             AppError::CoworkNotFound(format!("Cowork space '{}' not found", target))
         })?;
         let space_path = PathBuf::from(&space.path);
-        integrate_cowork_space(plugin_name, version, &description, &plugin_dir, &space_path)?;
+        #[allow(deprecated)]
+        {
+            integrate_cowork_space(plugin_name, version, &description, &plugin_dir, &space_path)?;
+        }
         installed_targets.push(format!("cowork:{}:{}", space.id, space.label));
     }
 
@@ -469,12 +496,62 @@ fn update_marketplace_manifest(
     Ok(())
 }
 
+fn migrate_legacy_marketplace_if_present() -> Result<(), AppError> {
+    if dirs::home_dir().is_none() {
+        return Ok(());
+    }
+
+    let legacy_mkt_dir = config_dir()?.join("marketplace");
+    let canonical_mkt_dir = marketplace_dir()?;
+
+    // If canonical already exists, migration already ran.
+    if canonical_mkt_dir.exists() {
+        return Ok(());
+    }
+
+    if !legacy_mkt_dir.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = canonical_mkt_dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let legacy_plugins_dir = legacy_mkt_dir.join("plugins");
+    if legacy_plugins_dir.exists() {
+        let canonical_plugins_dir = canonical_mkt_dir.join("plugins");
+        copy_dir_recursive(&legacy_plugins_dir, &canonical_plugins_dir)?;
+    }
+
+    let legacy_manifest = legacy_mkt_dir
+        .join(".claude-plugin")
+        .join("marketplace.json");
+    if legacy_manifest.exists() {
+        let canonical_manifest = canonical_mkt_dir
+            .join(".claude-plugin")
+            .join("marketplace.json");
+        if let Some(parent) = canonical_manifest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&legacy_manifest, &canonical_manifest)?;
+    }
+
+    log::info!(
+        "Migrated marketplace from legacy {} to canonical {}",
+        legacy_mkt_dir.display(),
+        canonical_mkt_dir.display()
+    );
+    Ok(())
+}
+
 /// Register marketplace and enable plugin in Claude Code
 fn integrate_claude_code(plugin_name: &str) -> Result<(), AppError> {
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return Ok(()), // Can't integrate without home dir
     };
+
+    migrate_legacy_marketplace_if_present()?;
 
     let claude_dir = home.join(".claude");
     if !claude_dir.exists() {
@@ -608,6 +685,9 @@ fn remove_claude_code_installed_plugin(
 
 /// Register marketplace and install plugin in a specific Cowork space.
 /// Creates cowork_plugins/ + cowork_settings.json if they don't exist (org accounts).
+#[deprecated(
+    note = "Legacy cowork_plugins/ store no longer authoritative — use integrate_claude_code instead. Slated for removal in v0.7.0."
+)]
 fn integrate_cowork_space(
     plugin_name: &str,
     version: &str,
@@ -625,11 +705,17 @@ fn integrate_cowork_space(
     let settings_path = space_path.join("cowork_settings.json");
     if !settings_path.exists() {
         fs::write(&settings_path, "{\"enabledPlugins\":{}}")?;
-        log::info!("Created cowork_settings.json at {}", settings_path.display());
+        log::info!(
+            "Created cowork_settings.json at {}",
+            settings_path.display()
+        );
     }
 
     // 1. Copy plugin to marketplaces/reumbra/{plugin_name}/
-    let mkt_plugin_dir = cowork_dir.join("marketplaces").join(MARKETPLACE_NAME).join(plugin_name);
+    let mkt_plugin_dir = cowork_dir
+        .join("marketplaces")
+        .join(MARKETPLACE_NAME)
+        .join(plugin_name);
     if mkt_plugin_dir.exists() {
         fs::remove_dir_all(&mkt_plugin_dir)?;
     }
@@ -689,7 +775,10 @@ fn integrate_cowork_space(
         serde_json::json!({})
     };
 
-    let mkt_rel_path = format!("mnt/.claude/cowork_plugins/marketplaces/{}", MARKETPLACE_NAME);
+    let mkt_rel_path = format!(
+        "mnt/.claude/cowork_plugins/marketplaces/{}",
+        MARKETPLACE_NAME
+    );
     km[MARKETPLACE_NAME] = serde_json::json!({
         "source": { "source": "directory", "path": mkt_rel_path },
         "installLocation": mkt_rel_path,
@@ -730,7 +819,11 @@ fn integrate_cowork_space(
     settings["enabledPlugins"][&plugin_key] = serde_json::Value::Bool(true);
     fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
 
-    log::info!("Integrated {} into Cowork space at {}", plugin_name, space_path.display());
+    log::info!(
+        "Integrated {} into Cowork space at {}",
+        plugin_name,
+        space_path.display()
+    );
     Ok(())
 }
 
@@ -771,13 +864,19 @@ pub fn uninstall_plugin(plugin_name: &str, target: &str) -> Result<(), AppError>
             let cowork_dir = PathBuf::from(&space.path).join("cowork_plugins");
             if cowork_dir.exists() {
                 // Remove from marketplaces/reumbra/{plugin}
-                let mkt_plugin_dir = cowork_dir.join("marketplaces").join(MARKETPLACE_NAME).join(plugin_name);
+                let mkt_plugin_dir = cowork_dir
+                    .join("marketplaces")
+                    .join(MARKETPLACE_NAME)
+                    .join(plugin_name);
                 if mkt_plugin_dir.exists() {
                     fs::remove_dir_all(&mkt_plugin_dir)?;
                 }
 
                 // Remove from cache/reumbra/{plugin}
-                let cache_plugin_dir = cowork_dir.join("cache").join(MARKETPLACE_NAME).join(plugin_name);
+                let cache_plugin_dir = cowork_dir
+                    .join("cache")
+                    .join(MARKETPLACE_NAME)
+                    .join(plugin_name);
                 if cache_plugin_dir.exists() {
                     fs::remove_dir_all(&cache_plugin_dir)?;
                 }
@@ -857,7 +956,9 @@ fn is_plugin_in_code(plugin_name: &str) -> bool {
         .and_then(|h| {
             let content = fs::read_to_string(h.join(".claude").join("settings.json")).ok()?;
             let settings: serde_json::Value = serde_json::from_str(&content).ok()?;
-            settings.get("enabledPlugins")?.get(&plugin_key)
+            settings
+                .get("enabledPlugins")?
+                .get(&plugin_key)
                 .and_then(|v| v.as_bool())
         })
         .unwrap_or(false)
@@ -1084,6 +1185,10 @@ mod tests {
 
     fn create_marketplace_plugin(plugin_name: &str, version: &str) -> PathBuf {
         let plugin_dir = marketplace_dir().unwrap().join("plugins").join(plugin_name);
+        create_plugin_at(&plugin_dir, plugin_name, version)
+    }
+
+    fn create_plugin_at(plugin_dir: &Path, plugin_name: &str, version: &str) -> PathBuf {
         fs::create_dir_all(plugin_dir.join(".claude-plugin")).unwrap();
         fs::create_dir_all(plugin_dir.join("skills")).unwrap();
         fs::write(plugin_dir.join("skills").join("README.md"), "fixture skill").unwrap();
@@ -1099,7 +1204,7 @@ mod tests {
         )
         .unwrap();
 
-        plugin_dir
+        plugin_dir.to_path_buf()
     }
 
     fn read_json(path: impl AsRef<Path>) -> Value {
@@ -1137,14 +1242,12 @@ mod tests {
         let manifest = MarketplaceManifest {
             name: "reumbra".to_string(),
             owner: serde_json::json!({"name": "Reumbra", "email": "support@reumbra.dev"}),
-            plugins: vec![
-                MarketplacePlugin {
-                    name: "forge-core".to_string(),
-                    source: "./plugins/forge-core".to_string(),
-                    description: Some("Core plugin".to_string()),
-                    version: Some("6.0.0".to_string()),
-                },
-            ],
+            plugins: vec![MarketplacePlugin {
+                name: "forge-core".to_string(),
+                source: "./plugins/forge-core".to_string(),
+                description: Some("Core plugin".to_string()),
+                version: Some("6.0.0".to_string()),
+            }],
         };
 
         let serialized = serde_json::to_string_pretty(&manifest).unwrap();
@@ -1164,6 +1267,24 @@ mod tests {
     }
 
     // --- Claude Code integration regressions ---
+
+    #[test]
+    fn claude_code_uses_canonical_marketplace_dir() {
+        with_temp_app_env(|home| {
+            let mkt_dir = marketplace_dir().unwrap();
+            let expected = home
+                .join(".claude")
+                .join("plugins")
+                .join("marketplaces")
+                .join("reumbra");
+
+            assert_eq!(mkt_dir, expected);
+            assert!(mkt_dir
+                .display()
+                .to_string()
+                .contains(".claude/plugins/marketplaces/reumbra"));
+        });
+    }
 
     #[test]
     fn claude_code_marketplace_owner_is_object() {
@@ -1211,6 +1332,10 @@ mod tests {
 
             assert!(install_path.is_absolute());
             assert_eq!(install_path, plugin_dir.canonicalize().unwrap());
+            assert!(install_path
+                .display()
+                .to_string()
+                .contains(".claude/plugins/marketplaces/reumbra/plugins/forge-core"));
             assert!(install_path.exists());
             assert!(install_path
                 .join(".claude-plugin")
@@ -1220,6 +1345,142 @@ mod tests {
                 .iter()
                 .any(|dir| install_path.join(dir).exists()));
             assert_eq!(entry["version"], "6.0.0");
+        });
+    }
+
+    #[test]
+    fn claude_code_install_path_is_inside_claude_home() {
+        with_temp_app_env(|home| {
+            create_marketplace_plugin("forge-core", "6.0.0");
+            update_marketplace_manifest("forge-core", "6.0.0", "Core plugin").unwrap();
+
+            integrate_claude_code("forge-core").unwrap();
+
+            let installed_plugins = read_json(
+                home.join(".claude")
+                    .join("plugins")
+                    .join("installed_plugins.json"),
+            );
+            let entry = &installed_plugins["plugins"]["forge-core@reumbra"][0];
+            let install_path = entry["installPath"].as_str().unwrap();
+
+            assert!(install_path.contains(".claude/plugins"));
+            assert!(install_path.contains(".claude/plugins/marketplaces/reumbra"));
+        });
+    }
+
+    #[test]
+    fn claude_code_known_marketplaces_points_to_canonical() {
+        with_temp_app_env(|home| {
+            create_marketplace_plugin("forge-core", "6.0.0");
+            update_marketplace_manifest("forge-core", "6.0.0", "Core plugin").unwrap();
+
+            integrate_claude_code("forge-core").unwrap();
+
+            let known_marketplaces = read_json(
+                home.join(".claude")
+                    .join("plugins")
+                    .join("known_marketplaces.json"),
+            );
+            let marketplace_path = known_marketplaces["reumbra"]["source"]["path"]
+                .as_str()
+                .unwrap();
+
+            assert!(marketplace_path.contains(".claude/plugins/marketplaces/reumbra"));
+            assert_eq!(
+                marketplace_path,
+                marketplace_dir().unwrap().display().to_string()
+            );
+        });
+    }
+
+    #[test]
+    fn migrate_legacy_marketplace_copies_files() {
+        with_temp_app_env(|_| {
+            let legacy_mkt_dir = config_dir().unwrap().join("marketplace");
+            let legacy_plugin_dir = legacy_mkt_dir.join("plugins").join("forge-core");
+            create_plugin_at(&legacy_plugin_dir, "forge-core", "6.0.0");
+            let legacy_manifest = legacy_mkt_dir
+                .join(".claude-plugin")
+                .join("marketplace.json");
+            fs::create_dir_all(legacy_manifest.parent().unwrap()).unwrap();
+            fs::write(
+                &legacy_manifest,
+                serde_json::json!({
+                    "name": MARKETPLACE_NAME,
+                    "owner": {"name": "Reumbra", "email": "support@reumbra.dev"},
+                    "plugins": [{
+                        "name": "forge-core",
+                        "source": "./plugins/forge-core",
+                        "description": "Core plugin",
+                        "version": "6.0.0"
+                    }]
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            integrate_claude_code("forge-core").unwrap();
+
+            let canonical_mkt_dir = marketplace_dir().unwrap();
+            assert!(legacy_plugin_dir.exists());
+            assert!(canonical_mkt_dir
+                .join("plugins")
+                .join("forge-core")
+                .join(".claude-plugin")
+                .join("plugin.json")
+                .exists());
+            assert!(canonical_mkt_dir
+                .join("plugins")
+                .join("forge-core")
+                .join("skills")
+                .join("README.md")
+                .exists());
+            assert!(canonical_mkt_dir
+                .join(".claude-plugin")
+                .join("marketplace.json")
+                .exists());
+        });
+    }
+
+    #[test]
+    fn migrate_legacy_marketplace_idempotent() {
+        with_temp_app_env(|_| {
+            let legacy_plugin_dir = config_dir()
+                .unwrap()
+                .join("marketplace")
+                .join("plugins")
+                .join("forge-core");
+            create_plugin_at(&legacy_plugin_dir, "forge-core", "5.0.0");
+            fs::write(
+                legacy_plugin_dir.join("skills").join("README.md"),
+                "legacy skill",
+            )
+            .unwrap();
+
+            let canonical_plugin_dir = marketplace_dir()
+                .unwrap()
+                .join("plugins")
+                .join("forge-core");
+            create_plugin_at(&canonical_plugin_dir, "forge-core", "6.0.0");
+            fs::write(
+                canonical_plugin_dir.join("skills").join("README.md"),
+                "canonical skill",
+            )
+            .unwrap();
+
+            integrate_claude_code("forge-core").unwrap();
+
+            let skill_readme =
+                fs::read_to_string(canonical_plugin_dir.join("skills").join("README.md")).unwrap();
+            let manifest = read_json(
+                canonical_plugin_dir
+                    .join(".claude-plugin")
+                    .join("plugin.json"),
+            );
+
+            assert_eq!(skill_readme, "canonical skill");
+            assert_eq!(manifest["version"], "6.0.0");
         });
     }
 
@@ -1379,13 +1640,12 @@ mod tests {
         });
 
         let plugin_key = format!("{}@{}", "forge-core", MARKETPLACE_NAME);
-        let found = ip.get("plugins")
-            .and_then(|p| p.get(&plugin_key))
-            .is_some();
+        let found = ip.get("plugins").and_then(|p| p.get(&plugin_key)).is_some();
         assert!(found, "forge-core should be in cowork");
 
         let missing_key = format!("{}@{}", "nonexistent", MARKETPLACE_NAME);
-        let not_found = ip.get("plugins")
+        let not_found = ip
+            .get("plugins")
             .and_then(|p| p.get(&missing_key))
             .is_some();
         assert!(!not_found, "nonexistent should not be in cowork");
@@ -1446,7 +1706,10 @@ mod tests {
 
     #[test]
     fn known_marketplaces_cowork_uses_relative_paths() {
-        let mkt_rel_path = format!("mnt/.claude/cowork_plugins/marketplaces/{}", MARKETPLACE_NAME);
+        let mkt_rel_path = format!(
+            "mnt/.claude/cowork_plugins/marketplaces/{}",
+            MARKETPLACE_NAME
+        );
         let mut km = serde_json::json!({});
         km[MARKETPLACE_NAME] = serde_json::json!({
             "source": { "source": "directory", "path": &mkt_rel_path },
@@ -1455,7 +1718,10 @@ mod tests {
         });
 
         let path = km["reumbra"]["source"]["path"].as_str().unwrap();
-        assert!(path.starts_with("mnt/"), "Cowork paths must start with mnt/");
+        assert!(
+            path.starts_with("mnt/"),
+            "Cowork paths must start with mnt/"
+        );
         assert!(!path.starts_with("/"), "Cowork paths must be relative");
     }
 
@@ -1506,7 +1772,11 @@ mod tests {
             ],
         };
 
-        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&manifest_path).unwrap();
         let restored: MarketplaceManifest = serde_json::from_str(&content).unwrap();
@@ -1553,7 +1823,10 @@ mod tests {
             "description": "Core development pipeline for Claude Code"
         }"#;
         let manifest: PluginManifest = serde_json::from_str(json).unwrap();
-        assert_eq!(manifest.description, "Core development pipeline for Claude Code");
+        assert_eq!(
+            manifest.description,
+            "Core development pipeline for Claude Code"
+        );
     }
 
     // --- InstalledPlugin targets ---

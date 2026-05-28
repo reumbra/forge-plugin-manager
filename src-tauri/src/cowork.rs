@@ -57,12 +57,16 @@ pub struct InstalledPlugin {
 /// Windows: %APPDATA%/Claude/local-agent-mode-sessions/
 /// macOS: ~/Library/Application Support/Claude/local-agent-mode-sessions/
 /// Linux: ~/.config/Claude/local-agent-mode-sessions/
+#[deprecated(
+    note = "Legacy cowork_plugins/ store no longer authoritative. Use the canonical Claude Code integration in storage.rs instead. Slated for removal in v0.7.0."
+)]
 pub fn detect_cowork_base() -> Result<PathBuf, AppError> {
     // dirs::config_dir() returns the correct path per OS:
     // Windows: %APPDATA%, macOS: ~/Library/Application Support, Linux: ~/.config
     let base = dirs::config_dir();
 
-    let base = base.ok_or_else(|| AppError::CoworkNotFound("Cannot determine config directory".into()))?;
+    let base =
+        base.ok_or_else(|| AppError::CoworkNotFound("Cannot determine config directory".into()))?;
     let claude_dir = base.join("Claude").join("local-agent-mode-sessions");
 
     if !claude_dir.exists() {
@@ -78,12 +82,11 @@ pub fn detect_cowork_base() -> Result<PathBuf, AppError> {
 
 /// Recursively search for cowork_plugins directory within session dirs
 fn find_cowork_plugins_dir(sessions_dir: &Path) -> Result<PathBuf, AppError> {
-    for session_entry in fs::read_dir(sessions_dir).map_err(|e| {
-        AppError::CoworkNotFound(format!("Cannot read sessions dir: {}", e))
-    })? {
-        let session_entry = session_entry.map_err(|e| {
-            AppError::CoworkNotFound(format!("Cannot read entry: {}", e))
-        })?;
+    for session_entry in fs::read_dir(sessions_dir)
+        .map_err(|e| AppError::CoworkNotFound(format!("Cannot read sessions dir: {}", e)))?
+    {
+        let session_entry = session_entry
+            .map_err(|e| AppError::CoworkNotFound(format!("Cannot read entry: {}", e)))?;
 
         if !session_entry.path().is_dir() {
             continue;
@@ -106,6 +109,9 @@ fn find_cowork_plugins_dir(sessions_dir: &Path) -> Result<PathBuf, AppError> {
 }
 
 /// Read the installed plugins registry
+#[deprecated(
+    note = "Legacy cowork_plugins/ store no longer authoritative. Use the canonical Claude Code integration in storage.rs instead. Slated for removal in v0.7.0."
+)]
 pub fn read_registry(cowork_path: &Path) -> Result<InstalledPluginsRegistry, AppError> {
     let registry_path = cowork_path.join("installed_plugins.json");
 
@@ -122,6 +128,9 @@ pub fn read_registry(cowork_path: &Path) -> Result<InstalledPluginsRegistry, App
 }
 
 /// Write the installed plugins registry
+#[deprecated(
+    note = "Legacy cowork_plugins/ store no longer authoritative. Use the canonical Claude Code integration in storage.rs instead. Slated for removal in v0.7.0."
+)]
 pub fn write_registry(
     cowork_path: &Path,
     registry: &InstalledPluginsRegistry,
@@ -133,6 +142,9 @@ pub fn write_registry(
 }
 
 /// Install a plugin from a zip file into the Cowork directory
+#[deprecated(
+    note = "Legacy cowork_plugins/ store no longer authoritative. Use the canonical Claude Code integration in storage.rs instead. Slated for removal in v0.7.0."
+)]
 pub fn install_plugin_from_zip(
     cowork_path: &Path,
     plugin_name: &str,
@@ -198,9 +210,15 @@ pub fn install_plugin_from_zip(
 }
 
 /// Uninstall a plugin
+#[deprecated(
+    note = "Legacy cowork_plugins/ store no longer authoritative. Use the canonical Claude Code integration in storage.rs instead. Slated for removal in v0.7.0."
+)]
 pub fn uninstall_plugin(cowork_path: &Path, plugin_name: &str) -> Result<(), AppError> {
     // Remove from cache
-    let cache_dir = cowork_path.join("cache").join(MARKETPLACE_NAME).join(plugin_name);
+    let cache_dir = cowork_path
+        .join("cache")
+        .join(MARKETPLACE_NAME)
+        .join(plugin_name);
     if cache_dir.exists() {
         fs::remove_dir_all(&cache_dir)?;
     }
@@ -215,6 +233,9 @@ pub fn uninstall_plugin(cowork_path: &Path, plugin_name: &str) -> Result<(), App
 }
 
 /// List all installed Reumbra plugins
+#[deprecated(
+    note = "Legacy cowork_plugins/ store no longer authoritative. Use the canonical Claude Code integration in storage.rs instead. Slated for removal in v0.7.0."
+)]
 pub fn list_installed(cowork_path: &Path) -> Result<Vec<InstalledPlugin>, AppError> {
     let registry = read_registry(cowork_path)?;
     let mut plugins = Vec::new();

@@ -4,8 +4,7 @@
 
 **forge-plugin-manager** — Tauri 2 desktop app for managing Forge plugins in Claude Cowork. Handles license activation, plugin catalog browsing, install/update/remove, and feedback.
 
-**Status:** v0.5.3 — owner-schema + installPath + enabledPlugins bugfix (Phase E, 2026-05-28).
-**Pending Phase F (BL-072 candidate)**: Install target relocation to `~/.claude/plugins/marketplaces/reumbra/` canonical path. Current `marketplace_dir()` writes to `%APPDATA%/forge-devkit/marketplace/` which fails Claude Code's `LocalPluginsReader` out-of-bounds check (`Skipping plugin with invalid path` → plugin invisible in Code view). Empirically verified canonical layout — see "Plugin Installation Architecture" below.
+**Status:** v0.6.0 — canonical install path migration (Phase F complete)
 
 ## Ecosystem Contract
 
