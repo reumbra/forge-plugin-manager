@@ -59,10 +59,7 @@ pub async fn activate_license(
     license_key: String,
     state: State<'_, AppState>,
 ) -> Result<LicenseInfo, AppError> {
-    let info = state
-        .api
-        .activate(&license_key, &state.machine_id)
-        .await?;
+    let info = state.api.activate(&license_key, &state.machine_id).await?;
 
     // Persist to memory
     *state.license_key.lock().unwrap() = Some(license_key.clone());
@@ -79,9 +76,7 @@ pub async fn activate_license(
 }
 
 #[tauri::command]
-pub async fn deactivate_license(
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, AppError> {
+pub async fn deactivate_license(state: State<'_, AppState>) -> Result<serde_json::Value, AppError> {
     let key = state
         .license_key
         .lock()
@@ -105,9 +100,7 @@ pub async fn deactivate_license(
 }
 
 #[tauri::command]
-pub async fn get_license_status(
-    state: State<'_, AppState>,
-) -> Result<LicenseInfo, AppError> {
+pub async fn get_license_status(state: State<'_, AppState>) -> Result<LicenseInfo, AppError> {
     let key = state
         .license_key
         .lock()
@@ -119,9 +112,7 @@ pub async fn get_license_status(
 }
 
 #[tauri::command]
-pub async fn get_plugin_catalog(
-    state: State<'_, AppState>,
-) -> Result<Vec<PluginInfo>, AppError> {
+pub async fn get_plugin_catalog(state: State<'_, AppState>) -> Result<Vec<PluginInfo>, AppError> {
     let key = state
         .license_key
         .lock()
@@ -173,10 +164,7 @@ pub async fn install_plugin(
 }
 
 #[tauri::command]
-pub async fn uninstall_plugin(
-    plugin_name: String,
-    target: String,
-) -> Result<(), AppError> {
+pub async fn uninstall_plugin(plugin_name: String, target: String) -> Result<(), AppError> {
     storage::uninstall_plugin(&plugin_name, &target)
 }
 
@@ -253,6 +241,9 @@ pub fn get_app_info(state: State<'_, AppState>) -> AppInfo {
         config_dir: storage::config_dir().ok().map(|p| p.display().to_string()),
         os: std::env::consts::OS.to_string(),
     };
-    log::info!("get_app_info response: {}", serde_json::to_string(&info).unwrap_or_default());
+    log::info!(
+        "get_app_info response: {}",
+        serde_json::to_string(&info).unwrap_or_default()
+    );
     info
 }

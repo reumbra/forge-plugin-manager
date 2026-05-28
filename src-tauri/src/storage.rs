@@ -497,50 +497,146 @@ fn update_marketplace_manifest(
 }
 
 fn migrate_legacy_marketplace_if_present() -> Result<(), AppError> {
-    if dirs::home_dir().is_none() {
+    let Some(home) = dirs::home_dir() else {
         return Ok(());
-    }
+    };
 
     let legacy_mkt_dir = config_dir()?.join("marketplace");
     let canonical_mkt_dir = marketplace_dir()?;
 
-    // If canonical already exists, migration already ran.
-    if canonical_mkt_dir.exists() {
-        return Ok(());
-    }
-
-    if !legacy_mkt_dir.exists() {
-        return Ok(());
-    }
-
-    if let Some(parent) = canonical_mkt_dir.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let legacy_plugins_dir = legacy_mkt_dir.join("plugins");
-    if legacy_plugins_dir.exists() {
-        let canonical_plugins_dir = canonical_mkt_dir.join("plugins");
-        copy_dir_recursive(&legacy_plugins_dir, &canonical_plugins_dir)?;
-    }
-
-    let legacy_manifest = legacy_mkt_dir
-        .join(".claude-plugin")
-        .join("marketplace.json");
-    if legacy_manifest.exists() {
-        let canonical_manifest = canonical_mkt_dir
-            .join(".claude-plugin")
-            .join("marketplace.json");
-        if let Some(parent) = canonical_manifest.parent() {
+    // Step 1: copy marketplace files (idempotent — skip if canonical already exists).
+    if !canonical_mkt_dir.exists() && legacy_mkt_dir.exists() {
+        if let Some(parent) = canonical_mkt_dir.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(&legacy_manifest, &canonical_manifest)?;
+
+        let legacy_plugins_dir = legacy_mkt_dir.join("plugins");
+        if legacy_plugins_dir.exists() {
+            let canonical_plugins_dir = canonical_mkt_dir.join("plugins");
+            copy_dir_recursive(&legacy_plugins_dir, &canonical_plugins_dir)?;
+        }
+
+        let legacy_manifest = legacy_mkt_dir
+            .join(".claude-plugin")
+            .join("marketplace.json");
+        if legacy_manifest.exists() {
+            let canonical_manifest = canonical_mkt_dir
+                .join(".claude-plugin")
+                .join("marketplace.json");
+            if let Some(parent) = canonical_manifest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&legacy_manifest, &canonical_manifest)?;
+        }
+
+        log::info!(
+            "Migrated marketplace from legacy {} to canonical {}",
+            legacy_mkt_dir.display(),
+            canonical_mkt_dir.display()
+        );
     }
 
-    log::info!(
-        "Migrated marketplace from legacy {} to canonical {}",
-        legacy_mkt_dir.display(),
-        canonical_mkt_dir.display()
-    );
+    // Step 2: rewrite legacy registry paths to canonical (independently idempotent).
+    // Customers upgrading from v0.5.3 have known_marketplaces.json + installed_plugins.json
+    // entries pointing into legacy_mkt_dir. Without this rewrite they stay broken
+    // (out-of-bounds) until each plugin is re-installed individually.
+    rewrite_legacy_registry_paths_if_needed(&home, &legacy_mkt_dir, &canonical_mkt_dir)?;
+
+    Ok(())
+}
+
+/// Rewrite `~/.claude/plugins/known_marketplaces.json` reumbra entry and any
+/// `installed_plugins.json` `installPath` whose value starts with the legacy
+/// marketplace dir. Idempotent: only writes when a legacy path is actually found.
+fn rewrite_legacy_registry_paths_if_needed(
+    home: &Path,
+    legacy_mkt_dir: &Path,
+    canonical_mkt_dir: &Path,
+) -> Result<(), AppError> {
+    let plugins_dir = home.join(".claude").join("plugins");
+    if !plugins_dir.exists() {
+        return Ok(());
+    }
+
+    let legacy_mkt_str = legacy_mkt_dir.display().to_string();
+    let canonical_mkt_str = canonical_mkt_dir.display().to_string();
+    let legacy_plugins_str = legacy_mkt_dir.join("plugins").display().to_string();
+    let canonical_plugins_str = canonical_mkt_dir.join("plugins").display().to_string();
+
+    // 1. known_marketplaces.json
+    let km_path = plugins_dir.join("known_marketplaces.json");
+    if km_path.exists() {
+        let content = fs::read_to_string(&km_path)?;
+        if let Ok(mut km) = serde_json::from_str::<Value>(&content) {
+            let mut changed = false;
+            if let Some(entry) = km.get_mut(MARKETPLACE_NAME) {
+                if let Some(loc) = entry.get("installLocation").and_then(|v| v.as_str()) {
+                    if loc == legacy_mkt_str {
+                        entry["installLocation"] = Value::String(canonical_mkt_str.clone());
+                        changed = true;
+                    }
+                }
+                if let Some(src_path) = entry
+                    .get("source")
+                    .and_then(|s| s.get("path"))
+                    .and_then(|v| v.as_str())
+                {
+                    if src_path == legacy_mkt_str {
+                        entry["source"]["path"] = Value::String(canonical_mkt_str.clone());
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                fs::write(&km_path, serde_json::to_string_pretty(&km)?)?;
+                log::info!(
+                    "Rewrote known_marketplaces.json {} entry: {} -> {}",
+                    MARKETPLACE_NAME,
+                    legacy_mkt_str,
+                    canonical_mkt_str
+                );
+            }
+        }
+    }
+
+    // 2. installed_plugins.json — rewrite installPath for every *@reumbra entry
+    //    whose path still starts with the legacy plugins dir.
+    let ip_path = plugins_dir.join("installed_plugins.json");
+    if ip_path.exists() {
+        let content = fs::read_to_string(&ip_path)?;
+        if let Ok(mut ip) = serde_json::from_str::<Value>(&content) {
+            let suffix = format!("@{}", MARKETPLACE_NAME);
+            let mut changed = false;
+            if let Some(plugins) = ip.get_mut("plugins").and_then(|v| v.as_object_mut()) {
+                for (key, entries) in plugins.iter_mut() {
+                    if !key.ends_with(&suffix) {
+                        continue;
+                    }
+                    if let Some(arr) = entries.as_array_mut() {
+                        for inst in arr.iter_mut() {
+                            if let Some(p) = inst.get("installPath").and_then(|v| v.as_str()) {
+                                if p.starts_with(&legacy_plugins_str) {
+                                    let new_path =
+                                        p.replacen(&legacy_plugins_str, &canonical_plugins_str, 1);
+                                    inst["installPath"] = Value::String(new_path);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if changed {
+                fs::write(&ip_path, serde_json::to_string_pretty(&ip)?)?;
+                log::info!(
+                    "Rewrote installed_plugins.json installPath entries: {} -> {}",
+                    legacy_plugins_str,
+                    canonical_plugins_str
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1481,6 +1577,172 @@ mod tests {
 
             assert_eq!(skill_readme, "canonical skill");
             assert_eq!(manifest["version"], "6.0.0");
+        });
+    }
+
+    #[test]
+    fn migrate_legacy_marketplace_rewrites_registry_entries() {
+        // v0.5.3 customer scenario: legacy marketplace dir exists, registry files
+        // already reference the legacy paths. After migration the registry must
+        // point to the canonical location, otherwise installed plugins remain
+        // out-of-bounds for Claude Code's LocalPluginsReader.
+        with_temp_app_env(|home| {
+            // Seed legacy marketplace with one plugin
+            let legacy_mkt_dir = config_dir().unwrap().join("marketplace");
+            let legacy_plugin_dir = legacy_mkt_dir.join("plugins").join("forge-core");
+            create_plugin_at(&legacy_plugin_dir, "forge-core", "11.1.0");
+            let legacy_manifest = legacy_mkt_dir
+                .join(".claude-plugin")
+                .join("marketplace.json");
+            fs::create_dir_all(legacy_manifest.parent().unwrap()).unwrap();
+            fs::write(
+                &legacy_manifest,
+                serde_json::json!({
+                    "name": MARKETPLACE_NAME,
+                    "owner": {"name": "Reumbra", "email": "support@reumbra.dev"},
+                    "plugins": [{"name": "forge-core", "source": "./plugins/forge-core", "version": "11.1.0"}]
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            // Pre-existing registry (v0.5.3-era) pointing to legacy paths
+            let plugins_dir = home.join(".claude").join("plugins");
+            fs::create_dir_all(&plugins_dir).unwrap();
+            let legacy_mkt_str = legacy_mkt_dir.display().to_string();
+            let legacy_plugin_str = legacy_plugin_dir.display().to_string();
+            fs::write(
+                plugins_dir.join("known_marketplaces.json"),
+                serde_json::json!({
+                    MARKETPLACE_NAME: {
+                        "installLocation": legacy_mkt_str,
+                        "source": {"source": "directory", "path": legacy_mkt_str},
+                        "lastUpdated": "2026-05-27T00:00:00Z"
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                plugins_dir.join("installed_plugins.json"),
+                serde_json::json!({
+                    "version": 2,
+                    "plugins": {
+                        "forge-core@reumbra": [{
+                            "scope": "user",
+                            "installPath": legacy_plugin_str,
+                            "version": "11.1.0",
+                            "installedAt": "2026-05-27T00:00:00Z",
+                            "lastUpdated": "2026-05-27T00:00:00Z"
+                        }]
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            // Install a SECOND plugin via v0.6.0 — triggers the migration helper
+            let second = marketplace_dir()
+                .unwrap()
+                .join("plugins")
+                .join("forge-product");
+            create_plugin_at(&second, "forge-product", "4.6.0");
+            // The marketplace.json must list forge-product so update_marketplace_manifest()
+            // doesn't fail; reuse the canonical helper to add it.
+            update_marketplace_manifest("forge-product", "4.6.0", "Product plugin").unwrap();
+            integrate_claude_code("forge-product").unwrap();
+
+            // Registry must now point to canonical for the existing forge-core entry
+            let canonical_mkt = marketplace_dir().unwrap().display().to_string();
+            let canonical_plugin = marketplace_dir()
+                .unwrap()
+                .join("plugins")
+                .join("forge-core")
+                .display()
+                .to_string();
+
+            let km = read_json(plugins_dir.join("known_marketplaces.json"));
+            assert_eq!(km[MARKETPLACE_NAME]["installLocation"], canonical_mkt);
+            assert_eq!(km[MARKETPLACE_NAME]["source"]["path"], canonical_mkt);
+
+            let ip = read_json(plugins_dir.join("installed_plugins.json"));
+            assert_eq!(
+                ip["plugins"]["forge-core@reumbra"][0]["installPath"],
+                canonical_plugin
+            );
+        });
+    }
+
+    #[test]
+    fn migrate_legacy_marketplace_registry_rewrite_idempotent() {
+        // Already-migrated customer: registry has canonical paths.
+        // Re-running migration must not touch them and must not corrupt the JSON
+        // structure (no unintended rewrites).
+        with_temp_app_env(|home| {
+            create_marketplace_plugin("forge-core", "11.1.0");
+            update_marketplace_manifest("forge-core", "11.1.0", "Core plugin").unwrap();
+
+            let plugins_dir = home.join(".claude").join("plugins");
+            fs::create_dir_all(&plugins_dir).unwrap();
+            let canonical_mkt = marketplace_dir().unwrap().display().to_string();
+            let canonical_plugin = marketplace_dir()
+                .unwrap()
+                .join("plugins")
+                .join("forge-core")
+                .display()
+                .to_string();
+
+            // Registry already points to canonical (post-migration state)
+            fs::write(
+                plugins_dir.join("known_marketplaces.json"),
+                serde_json::json!({
+                    MARKETPLACE_NAME: {
+                        "installLocation": canonical_mkt,
+                        "source": {"source": "directory", "path": canonical_mkt},
+                        "lastUpdated": "2026-05-28T00:00:00Z"
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                plugins_dir.join("installed_plugins.json"),
+                serde_json::json!({
+                    "version": 2,
+                    "plugins": {
+                        "forge-core@reumbra": [{
+                            "scope": "user",
+                            "installPath": canonical_plugin,
+                            "version": "11.1.0",
+                            "installedAt": "2026-05-28T00:00:00Z",
+                            "lastUpdated": "2026-05-28T00:00:00Z"
+                        }]
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            // Install another plugin — migration helper runs but should noop on registry
+            let second = marketplace_dir().unwrap().join("plugins").join("forge-qa");
+            create_plugin_at(&second, "forge-qa", "3.15.3");
+            update_marketplace_manifest("forge-qa", "3.15.3", "QA plugin").unwrap();
+            integrate_claude_code("forge-qa").unwrap();
+
+            let ip = read_json(plugins_dir.join("installed_plugins.json"));
+            // Pre-existing entry still canonical
+            assert_eq!(
+                ip["plugins"]["forge-core@reumbra"][0]["installPath"],
+                canonical_plugin
+            );
+            // New entry also canonical
+            let qa_path = ip["plugins"]["forge-qa@reumbra"][0]["installPath"]
+                .as_str()
+                .unwrap();
+            assert!(
+                qa_path.contains(".claude") && qa_path.contains("plugins"),
+                "new install path must be under .claude/plugins, got: {qa_path}"
+            );
         });
     }
 

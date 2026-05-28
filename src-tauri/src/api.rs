@@ -252,9 +252,7 @@ impl ApiClient {
         &self,
         feedback: FeedbackRequest,
     ) -> Result<serde_json::Value, AppError> {
-        let mut builder = self
-            .client
-            .post(format!("{}/feedback", self.base_url));
+        let mut builder = self.client.post(format!("{}/feedback", self.base_url));
 
         if let Some(ref key) = feedback.license_key {
             builder = builder
