@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1 - 2026-05-29
+
+- Fixed: do not canonicalize the plugin install path before writing it to `installed_plugins.json`. On Windows `std::fs::canonicalize` returns a `\\?\C:\...` extended-length verbatim path, which Claude Desktop's `LocalPluginsReader` rejects with an out-of-bounds check. The result was that v0.6.0 installs registered correctly enough for slash commands to work, but were hidden from the Customize UI in both Cowork and Code views. Path is now written as the plain absolute path returned by `marketplace_dir()`.
+
 ## 0.6.0 - 2026-05-29
 
 - Breaking change: relocated the Claude Code marketplace target to the canonical `~/.claude/plugins/marketplaces/reumbra/` path so Claude Desktop accepts installed plugin paths in Code view.

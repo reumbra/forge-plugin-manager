@@ -725,11 +725,19 @@ fn write_claude_code_installed_plugin(
     let plugin_dir = marketplace_dir()?.join("plugins").join(plugin_name);
     let manifest_path = plugin_dir.join(".claude-plugin").join("plugin.json");
     let manifest: PluginManifest = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
-    let install_path = plugin_dir
-        .canonicalize()
-        .unwrap_or_else(|_| plugin_dir.clone())
-        .display()
-        .to_string();
+    // IMPORTANT: do NOT call `.canonicalize()` here.
+    //
+    // On Windows, std::fs::canonicalize() returns an extended-length verbatim
+    // path with the `\\?\` prefix (e.g. `\\?\C:\Users\Admin\.claude\...`).
+    // Claude Desktop's LocalPluginsReader performs a string-based "inside
+    // ~/.claude/" bounds check and rejects UNC-prefixed paths as out-of-bounds,
+    // hiding the plugin from the Customize UI in both Cowork and Code views
+    // (slash commands still resolve via the CLI bridge, which masks the bug).
+    //
+    // `plugin_dir` is already absolute (derived from dirs::home_dir() via
+    // marketplace_dir()) and free of symlinks, so canonicalization buys us
+    // nothing in this codebase.
+    let install_path = plugin_dir.display().to_string();
 
     let ip_path = plugins_dir.join("installed_plugins.json");
     let mut ip: Value = if ip_path.exists() {
@@ -1427,7 +1435,10 @@ mod tests {
             let install_path = PathBuf::from(entry["installPath"].as_str().unwrap());
 
             assert!(install_path.is_absolute());
-            assert_eq!(install_path, plugin_dir.canonicalize().unwrap());
+            // We deliberately do NOT canonicalize before writing the install
+            // path — on Windows that adds a `\\?\` UNC prefix that Claude
+            // Desktop rejects. Compare against the raw plugin_dir instead.
+            assert_eq!(install_path, plugin_dir);
             assert!(install_path
                 .display()
                 .to_string()
